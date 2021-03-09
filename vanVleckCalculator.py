@@ -146,7 +146,7 @@ class RotationAxis(object):
         a2 = a2[1:] if a2 else None
         n = int(n[1:]) if n else 0
 
-        if (n < 0 or n > 6):
+        if (n < 2 or n > 6):
             raise ValueError('Invalid n = {0} for axis definition'.format(n))
 
         self.axis_str = axis_str
@@ -231,13 +231,22 @@ class RotatingMolecule(object):
 
         rot_positions = []
 
+        def expand_rotation(x, R, o, n):
+            all_rotations = [x]
+            for i in range(1, n):
+                x = all_rotations[-1]
+                x = (R @ (x-o)) + o
+                all_rotations.append(x)
+            return np.array(all_rotations)
+
         for p in self.positions:
-            all_rotations = []
+            all_rotations = [p]
+
+            # Define all the combined rotations
             for (R, o, n) in self.rotations:
-                for i in range(n):
-                    x = all_rotations[-1] if i > 0 else p
-                    x = (R @ (x-o)) + o
-                    all_rotations.append(x)
+                all_rotations = [expand_rotation(x, R, o, n)
+                                 for x in all_rotations]
+                all_rotations = np.concatenate(all_rotations)
             rot_positions.append(all_rotations)
 
         if len(self.rotations) == 0:
@@ -245,6 +254,7 @@ class RotatingMolecule(object):
             rot_positions = self.positions[:, None, :]
 
         self.rot_positions = np.array(rot_positions)
+        print(self.rot_positions.shape)
 
     def atoms_rot_positions(self, element=None):
 
@@ -323,6 +333,7 @@ if __name__ == "__main__":
     axes = [RotationAxis(a) for a in args.axes]
     axes += [RotationAxis(a, True) for a in args.CoMaxes]
 
+    # Find molecules
     mols = Molecules.get(structure)
     mol_coms = MoleculeCOM.get(structure)
     mol_types = molecule_crystallographic_types(structure, mols)
