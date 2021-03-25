@@ -254,7 +254,6 @@ class RotatingMolecule(object):
             rot_positions = self.positions[:, None, :]
 
         self.rot_positions = np.array(rot_positions)
-        print(self.rot_positions.shape)
 
     def atoms_rot_positions(self, element=None):
 
