@@ -53,8 +53,7 @@ def read_with_labels(fname):
     # them
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        struct = io.read(args.structure, store_tags=True)
-    # (download from Gitlab, https://gitlab.com/ase/ase)
+        struct = io.read(fname, store_tags=True)
     try:
         kinds = struct.get_array('spacegroup_kinds')
         struct.new_array('site_labels',
