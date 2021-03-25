@@ -261,16 +261,7 @@ class RotatingMolecule(object):
         else:
             indices = np.arange(len(self.s))
         return [(self.labels[i], self.rot_positions[i]) for i in indices]
-
-
-class VanVleckCalculator(object):
-
-    def __init__(self, rmols, element='H'):
-
-        self.element = element
-        self.el_gamma = _get_isotope_data([element], 'gamma')[0]
-        self.el_I = _get_isotope_data([element], 'I')[0]
-
+    
 
 if __name__ == "__main__":
 
