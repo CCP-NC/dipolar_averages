@@ -16,13 +16,14 @@ import numpy as np
 from collections import defaultdict, Counter
 from soprano.nmr.tensor import NMRTensor
 from soprano.nmr.utils import _get_isotope_data, _dip_constant
-from soprano.properties.transform import Rotate
+#from soprano.properties.transform import Rotate
 from soprano.properties.linkage import Molecules, MoleculeCOM
 from soprano.utils import minimum_supcell, supcell_gridgen
 
 from ase import io
 from ase.quaternions import Quaternion
 
+#np.seterr(all='raise')
 
 def read_with_labels(fname):
     """ Loads a structure using ASE, ensuring that site labels are present.
@@ -112,7 +113,7 @@ def average_dipolar_tensor(p1, p2, gamma, intra=False):
 
 def van_vleck_contribution(d, z, eta, y, I, axis=None):
     """Compute the Van Vleck second moment contribution of a dipolar tensor
-    given the largest (absolute) eigenvalue d, its eigenvector z, the 
+    given the largest (absolute) eigenvalue d, its eigenvector z, the
     asymmetry eta, and the eigenvector y of the smallest (absolute) eigenvalue.
     Needs also the magnitude of the spin, I.
 
@@ -261,7 +262,7 @@ class RotatingMolecule(object):
         else:
             indices = np.arange(len(self.s))
         return [(self.labels[i], self.rot_positions[i]) for i in indices]
-    
+
 
 if __name__ == "__main__":
 
@@ -291,12 +292,12 @@ if __name__ == "__main__":
                         default=10.0,
                         help="Radius over which to include molecules (in Å)")
     parser.add_argument('--euler_rotation', '-er', dest="euler_rotation",
-                        nargs=3, type=float, default=[0., 0., 0.],
+                        nargs=3, type=float,
                         help="Overall rotation of crystal system expressed at"
                         " ZYZ Euler angles in degrees")
-    parser.add_argument('--powder', '-p', dest="powder", action="store_true",
-                        default=False,
-                        help="Use powder averaging for all second moments")
+#    parser.add_argument('--powder', '-p', dest="powder", action="store_true",
+#                        default=False,
+#                        help="Use powder averaging for all second moments")
     parser.add_argument('--verbose', '-v',
                         help="Increase verbosity", action='count')
 
@@ -304,14 +305,16 @@ if __name__ == "__main__":
     structure = read_with_labels(args.structure)
 
     # Orientation
-    B_axis = np.array([0, 0, 1.0])
-    if args.powder:
+    if args.euler_rotation is None:
         B_axis = None
     else:
+        B_axis = np.array([0, 0, 1.0])
         euler = np.array(args.euler_rotation)*np.pi/180.0
-        rotation_quat = Quaternion.from_euler_angles(*euler)
-        axis, angle = rotation_quat.axis_angle()
-        structure.rotate(180/np.pi*angle, v=axis, rotate_cell=True)
+    # This test is a bit inelegant, but avoids current problems with feeding a zero rotation to axis_angle
+        if np.prod(euler) != 0.0:
+            rotation_quat = Quaternion.from_euler_angles(*euler)
+            axis, angle = rotation_quat.axis_angle()
+            structure.rotate(180/np.pi*angle, v=axis, rotate_cell=True)
 
     # NMR data
     element = args.element
