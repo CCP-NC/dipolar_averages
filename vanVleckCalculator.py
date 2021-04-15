@@ -293,8 +293,9 @@ if __name__ == "__main__":
                         help="Radius over which to include molecules (in Å)")
     parser.add_argument('--euler_rotation', '-er', dest="euler_rotation",
                         nargs=3, type=float,
-                        help="Overall rotation of crystal system expressed at"
-                        " ZYZ Euler angles in degrees")
+                        help="Calculate for single orientation (rather than "
+                        "powder) with an overall rotation of crystal"
+                        "system expressed as ZYZ Euler angles in degrees")
 #    parser.add_argument('--powder', '-p', dest="powder", action="store_true",
 #                        default=False,
 #                        help="Use powder averaging for all second moments")
