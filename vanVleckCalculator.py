@@ -311,10 +311,9 @@ if __name__ == "__main__":
         B_axis = np.array([0, 0, 1.0])
         euler = np.array(args.euler_rotation)*np.pi/180.0
     # This test is a bit inelegant, but avoids current problems with feeding a zero rotation to axis_angle
-        if np.prod(euler) != 0.0:
-            rotation_quat = Quaternion.from_euler_angles(*euler)
-            axis, angle = rotation_quat.axis_angle()
-            structure.rotate(180/np.pi*angle, v=axis, rotate_cell=True)
+        rotation_quat = Quaternion.from_euler_angles(*euler)
+        axis, angle = rotation_quat.axis_angle()
+        structure.rotate(180/np.pi*angle, v=axis, rotate_cell=True)
 
     # NMR data
     element = args.element
