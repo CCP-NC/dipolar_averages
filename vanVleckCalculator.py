@@ -210,9 +210,9 @@ class RotatingMolecule(object):
         for ax in axes:
             try:
                 R, o, n = ax.validate(self)
+                self.rotations.append((R, o, n))
             except ValueError as e:
                 print('Skipping axis {0}: {1}'.format(ax, e))
-            self.rotations.append((R, o, n))
 
         # Do they all commute?
         for i, (R1, o1, n1) in enumerate(self.rotations):
