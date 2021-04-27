@@ -133,7 +133,7 @@ def van_vleck_contribution(d, z, eta, y, I, axis=None):
 
 class RotationAxis(object):
 
-    def __init__(self, axis_str, force_com=False):
+    def __init__(self, axis_str, force_com=False, off_com_tol=0.1):
 
         axre = re.compile('([A-Za-z0-9]+)(,[A-Za-z0-9]+)*(:[0-9])*')
         m = axre.match(axis_str)
@@ -152,7 +152,8 @@ class RotationAxis(object):
         self.n = n
         self.a1 = a1
         self.a2 = a2
-        self.com = force_com
+        self.force_com = force_com
+        self.off_com_tol = off_com_tol
 
     def validate(self, rmol):
         # Check if this axis applies to the given RotatingMolecule
@@ -170,10 +171,16 @@ class RotationAxis(object):
         v = p2-p1
         v /= np.linalg.norm(v)  # Vector
 
-        if self.com:
-            r = (rmol.com-p1)
-            if not(np.isclose(r @ v, np.linalg.norm(r))):
-                raise ValueError('Axis does not pass through COM')
+        if self.force_com:
+            # Force this to pass through the center of mass
+            p1 = rmol.com
+            p2 = p1 + v
+
+        # Does the axis pass through the CoM?
+        r = (rmol.com-p1)
+        d = np.linalg.norm(r-(r@v)*v)
+        if d > self.off_com_tol:
+            raise ValueError('Axis does not pass through CoM')
 
         # Quaternion
         if self.n > 0:
@@ -261,7 +268,7 @@ class RotatingMolecule(object):
         else:
             indices = np.arange(len(self.s))
         return [(self.labels[i], self.rot_positions[i]) for i in indices]
-    
+
 
 if __name__ == "__main__":
 
