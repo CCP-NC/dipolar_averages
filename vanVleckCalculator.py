@@ -16,14 +16,19 @@ import numpy as np
 from collections import defaultdict, Counter
 from soprano.nmr.tensor import NMRTensor
 from soprano.nmr.utils import _get_isotope_data, _dip_constant
-#from soprano.properties.transform import Rotate
 from soprano.properties.linkage import Molecules, MoleculeCOM
 from soprano.utils import minimum_supcell, supcell_gridgen
 
 from ase import io
 from ase.quaternions import Quaternion
 
+verbose = 0
+
 #np.seterr(all='raise')
+
+# Typical command line arguments:
+# TRIAMT01_geomopt-out.cif
+
 
 def read_with_labels(fname):
     """ Loads a structure using ASE, ensuring that site labels are present.
@@ -65,16 +70,38 @@ def read_with_labels(fname):
     return struct
 
 
-def molecule_crystallographic_types(s, mols):
+def molecule_crystallographic_types(struct):
+    """ Loads a structure using ASE, ensuring that site labels are present.
 
-    kinds = s.get_array('spacegroup_kinds')
+    Parameters
+    ----------
+    struct : ASE Atoms object
+        Source structure
+
+    Returns
+    -------
+    AtomSelection array
+        Set of molecules found in structure
+    dict of list of indices
+        Molecules grouped by `chemical signature` as dict key. The signatures
+        differentiate the atoms but are not readily parseable. The lists
+        are indices into the molecules array
+
+    Notes
+    -----
+    Requires `spacegroup_kinds` array to be present in loaded structure.
+    This requires an up-to-date ASE.
+    """
+
+    mols = Molecules.get(struct)
+    kinds = struct.get_array('spacegroup_kinds')
     # Find which ones are equivalent
     mol_types = defaultdict(list)
     for i, m in enumerate(mols):
         m_signature = frozenset(Counter(kinds[m.indices]).items())
         mol_types[m_signature].append(i)
 
-    return mol_types
+    return mols, mol_types
 
 
 def average_dipolar_tensor(p1, p2, gamma, intra=False):
@@ -83,7 +110,6 @@ def average_dipolar_tensor(p1, p2, gamma, intra=False):
     the two spins part of the same molecule and thus rotating together.
 
     Returns values in kHz.
-
     """
 
     p1 = np.array(p1)
@@ -133,21 +159,58 @@ def van_vleck_contribution(d, z, eta, y, I, axis=None):
 
 
 class RotationAxis(object):
+    """ Class defining an axis of rotation
+
+    Attributes
+    ----------
+    axis_str : string
+        User specification of axis <label>[,<label>][:<n>]
+        where <label> is an atom site label. `n` specifies a :math:`C_n`
+        axis.
+    n : integer
+        `n` for a :math:`C_n` specification, with 0 corresponding to free
+        rotation
+    a1 : string
+        Site label for atom 1
+    a2 : string
+        Site label for atom 2. ``None`` if axis passes through a pair of atoms
+        with label **a1**
+    force_com : bool, optional
+        If ``True``, translate axis so that it passes through centre-of-mass
+        (default ``False``).This allows the axis to be defined using a pair
+        of atoms that have the correct relative orientation, but which do
+        not sit on the desired axis.
+    off_com_tol : float, optional
+        Tolerance for distance (in A) between centre of mass (CoM) of molecule
+        and axis (default 0.1 A). Rotation about an axis away from the CoM
+        is unphysical and would suggest that the axis is passing through
+        the wrong atoms. ``None`` disables check.
+   """
 
     def __init__(self, axis_str, force_com=False, off_com_tol=0.1):
+        """
+        Raises
+        ------
+        ValueError
+            If `n` in the :math:`C_n` specification in `axis_str` is outside
+            the range 2 to 6
+        """
 
-        axre = re.compile('([A-Za-z0-9]+)(,[A-Za-z0-9]+)*(:[0-9])*')
+        axre = re.compile('([A-Za-z0-9]+)(?:,([A-Za-z0-9]+))?(?::([0-9]))?')
         m = axre.match(axis_str)
 
         if not m:
-            raise ValueError('Invalid axis definition {0}'.format(axis_str))
+            raise ValueError('Invalid axis definition {}'.format(axis_str))
 
         a1, a2, n = m.groups()
-        a2 = a2[1:] if a2 else None
-        n = int(n[1:]) if n else 0
-
-        if (n < 2 or n > 6):
-            raise ValueError('Invalid n = {0} for axis definition'.format(n))
+        if n:
+            n = int(n)
+            if (n < 2 or n > 6):
+                raise ValueError('Invalid n = {} for axis definition'.format(n))
+        else:
+            n = 0
+        if a1 == a2:  # capture a1 = a2 special case (code will fail later if not)
+            a2 = None
 
         self.axis_str = axis_str
         self.n = n
@@ -157,31 +220,64 @@ class RotationAxis(object):
         self.off_com_tol = off_com_tol
 
     def validate(self, rmol):
-        # Check if this axis applies to the given RotatingMolecule
+        """ Check if this axis is valid for the given molecule
+
+        Parameters
+        ----------
+        rmol : RotatingMolecule
+            Molecule for which to validate axis
+
+        Returns
+        -------
+        3 x 3 numpy array:
+            Rotation matrix for :math:`C_n` rotation about axis
+        3 vector:
+            Point on axis
+        integer:
+            Value of n
+
+        Raises
+        ------
+        ValueError
+            If the axis is not valid for **rmol**
+
+        Notes
+        -----
+        The code will behave unexpectedly if either of the two labels are not
+        present in the molecule, but other label returns 2 atoms. Rather
+        than generate an error (expected), the axis will be based on
+        the pair of atoms that are present.
+
+        Return values for n = 0 currently unclear.
+        """
+
         labels = rmol.labels
 
+# Suspect code here (see Notes)
+# Really should check that labels are positively present
         ax_indices = np.concatenate((np.where(labels == self.a1)[0],
                                      np.where(labels == self.a2)[0]))
         if ax_indices.shape != (2,):
-            raise ValueError('Invalid axis; axis does not define two atoms'
-                             ' in molecule')
+            raise ValueError('Invalid axis: {} does not define two atoms'
+                             ' in molecule'.format(self.axis_str))
 
         i1, i2 = ax_indices
         p1, p2 = rmol.positions[ax_indices]
 
-        v = p2-p1
-        v /= np.linalg.norm(v)  # Vector
+        v = p2 - p1
+        v /= np.linalg.norm(v)  # unit vector defining axis direction
 
         if self.force_com:
             # Force this to pass through the center of mass
             p1 = rmol.com
             p2 = p1 + v
-
-        # Does the axis pass through the CoM?
-        r = (rmol.com-p1)
-        d = np.linalg.norm(r-(r@v)*v)
-        if d > self.off_com_tol:
-            raise ValueError('Axis does not pass through CoM')
+        elif self.off_com_tol is not None:
+            # Does the axis pass through the CoM?
+            r = rmol.com - p1
+            d = np.linalg.norm(r-(r@v)*v)
+            if d > self.off_com_tol:
+                raise ValueError('Axis does not pass through centre-of-mass '
+                    '(within tolerance of {} A)'.format(self.off_com_tol))
 
         # Quaternion
         if self.n > 0:
@@ -190,7 +286,7 @@ class RotationAxis(object):
             n = self.n
         else:
             R = v[:, None]*v[None, :]
-            n = 1
+            n = 1  # Why returning 1 and not 0?
 
         return (R, p1, n)
 
@@ -199,8 +295,44 @@ class RotationAxis(object):
 
 
 class RotatingMolecule(object):
+    """ Class defining a rotating molecule
 
-    def __init__(self, s, mol, ijk=[0, 0, 0], axes=[]):
+    Attributes
+    ----------
+    cell : ASE cell object
+        Unit cell definition from passed structure
+    s : Atoms object
+        Subset of the original structure containing atoms of molecule with
+        co-ordinates adjusted for given supercell position.
+    positions : array of 3-vector
+        Positions of atoms of `s`
+    com : 3-vector
+        Centre of mass of molecule (recalculated for shifted position)
+    symbols : array of string
+        Element labels of atoms of `s`
+    labels : array of string
+        Site labels of atoms of `s`
+
+    Notes
+    -----
+    Currently code creates a RotatingMolecule for every molecule within the
+    selection radius, even if unaffected by motion (Z' > 1). Not clear whether
+    this is the Right Thing.
+
+    The code has two tests for non-commuting rotations. The first should always
+    be passed for Z' = 1, since all the axes should pass through the CoM
+    unless the tolerance is large (no allowance is made for a large
+    off_com_tol). The second is expected to fail, e.g. for 2 C3 rotations.
+    But it's not clear why this should generate an exception rather than a
+    warning.
+
+    All atomic positions in molecule are evaluated, even though only a subset
+    corresponding to selected isotope are needed. Similarly symbols, labels
+    arrays duplicate information.
+   """
+
+    def __init__(self, s, mol, axes, ijk=[0, 0, 0],
+                 ignoreinvalid=False, checkcommuting=True):
 
         self.cell = s.get_cell()
         self.s = mol.subset(s, use_cell_indices=True)
@@ -208,57 +340,83 @@ class RotatingMolecule(object):
                              self.cell.cartesian_positions(ijk))
         self.positions = self.s.get_positions()
         self.symbols = np.array(self.s.get_chemical_symbols())
-        self.com = self.s.get_center_of_mass()
+        self.com = self.s.get_center_of_mass()  # Duplicates previous CoM calculation?
 
         # CIF labels
         self.labels = self.s.get_array('site_labels')
 
-        # Now analyze rotation axes
+        # Now analyze how each axis affects the molecule
         self.rotations = []
         for ax in axes:
             try:
-                R, o, n = ax.validate(self)
-                self.rotations.append((R, o, n))
+                self.rotations.append(ax.validate(self))
             except ValueError as e:
-                print('Skipping axis {0}: {1}'.format(ax, e))
+                if ignoreinvalid:
+                    print('Skipping axis {0}: {1}'.format(ax, e))
+                else:
+                    raise
 
-        # Do they all commute?
-        for i, (R1, o1, n1) in enumerate(self.rotations):
-            for j, (R2, o2, n2) in enumerate(self.rotations[i+1:]):
-                # Check that o2 is invariant under R1
-                o2r = (R1 @ (o2-o1)) + o1
-                if not np.isclose(np.linalg.norm(o2r-o2), 0):
-                    raise ValueError('Molecule has multiple rotations with'
-                                     ' non-intersecting axes')
-                # Check that R1 and R2 commute
-                comm = R1 @ R2 - R2 @ R1
-                if not np.isclose(np.linalg.norm(comm), 0):
-                    raise ValueError('Molecule has multiple non-commuting'
-                                     ' rotations')
-
-        rot_positions = []
+        # Do they all commute (see Notes)?
+        if checkcommuting:
+            for i, (R1, o1, n1) in enumerate(self.rotations):
+                for j, (R2, o2, n2) in enumerate(self.rotations[i+1:]):
+                    # Check that o2 is invariant under R1
+                    o2r = (R1 @ (o2-o1)) + o1
+                    if not np.isclose(np.linalg.norm(o2r-o2), 0.0):
+                        raise ValueError('Molecule has rotations with'
+                                         ' non-intersecting axes')
+                    # Check that R1 and R2 commute
+                    comm = R1 @ R2 - R2 @ R1
+                    if not np.isclose(np.linalg.norm(comm), 0.0):
+                        raise ValueError('Molecule has non-commuting rotations')
+            if verbose:
+                print("Axis commutation checked passed")
 
         def expand_rotation(x, R, o, n):
+            """ Internal function to generate set of positions corresponding
+            to rotation about :math:`C_n`
+
+            Parameters
+            ----------
+            x : 3-vector
+                Starting position (Cartesian axes)
+            R : 3 x 3 array
+                Rotation matrix
+            o : 3-vector
+                Origin (point on rotation axis)
+            n : integer
+                `n` of :math:`C_n`, where `n` is guaranteed to be >1
+
+            Returns
+            -------
+            array of 3-vectors:
+                Set of `n` positions
+            """
             all_rotations = [x]
-            for i in range(1, n):
+            for _ in range(1, n):
                 x = all_rotations[-1]
                 x = (R @ (x-o)) + o
                 all_rotations.append(x)
             return np.array(all_rotations)
 
-        for p in self.positions:
-            all_rotations = [p]
-
-            # Define all the combined rotations
-            for (R, o, n) in self.rotations:
-                all_rotations = [expand_rotation(x, R, o, n)
-                                 for x in all_rotations]
-                all_rotations = np.concatenate(all_rotations)
-            rot_positions.append(all_rotations)
-
         if len(self.rotations) == 0:
             # Just regular positions...
             rot_positions = self.positions[:, None, :]
+        else:
+            rot_positions = []
+            for p in self.positions:
+                all_rotations = [p]
+
+                # Define all the combined rotations
+                # Looks weird - add some verbose output
+                for rot_def in self.rotations:
+                    all_rotations = [expand_rotation(x, *rot_def)
+                                     for x in all_rotations]
+                    all_rotations = np.concatenate(all_rotations)
+                rot_positions.append(all_rotations)
+
+            if verbose:
+                print("Number of rotation positions: {}".format(len(rot_positions)))
 
         self.rot_positions = np.array(rot_positions)
 
@@ -276,8 +434,7 @@ if __name__ == "__main__":
     parser = ap.ArgumentParser()
     parser.add_argument('structure',
                         help="A structure file containing site labels in an "
-                        "ASE "
-                        "readable format, typically .cif")
+                        "ASE readable format, typically .cif")
     parser.add_argument('--element', '-e', default='H', dest='element',
                         help="Element for which to compute the (homonuclear) "
                         "dipolar couplings")
@@ -306,10 +463,12 @@ if __name__ == "__main__":
 #    parser.add_argument('--powder', '-p', dest="powder", action="store_true",
 #                        default=False,
 #                        help="Use powder averaging for all second moments")
-    parser.add_argument('--verbose', '-v',
+    parser.add_argument('--verbose', '-v', default=0,
                         help="Increase verbosity", action='count')
 
     args = parser.parse_args()
+    verbose = args.verbose
+
     structure = read_with_labels(args.structure)
 
     # Orientation
@@ -323,19 +482,18 @@ if __name__ == "__main__":
         structure.rotate(180/np.pi*angle, v=axis, rotate_cell=True)
 
     # NMR data
+    # Not ideal - should be isotope rather than element based
     element = args.element
     el_I = _get_isotope_data([element], 'I')[0]
     el_gamma = _get_isotope_data([element], 'gamma')[0]
 
-    # Parse axes
-    axes = [RotationAxis(a) for a in args.axes]
+    # Parse axes. Note that application order shouldn't matter
+    axes = [RotationAxis(a, False) for a in args.axes]
     axes += [RotationAxis(a, True) for a in args.CoMaxes]
 
     # Find molecules
-    mols = Molecules.get(structure)
+    mols, mol_types = molecule_crystallographic_types(structure)
     mol_coms = MoleculeCOM.get(structure)
-    mol_types = molecule_crystallographic_types(structure, mols)
-    R = args.radius
 
     # Types of molecule?
     Z = len(mols)
@@ -343,40 +501,60 @@ if __name__ == "__main__":
 
     print('Structure analysed: Z = {}, Z\' = {}'.format(Z, Zp))
 
+    R = args.radius
+
     # Which is the central molecule?
-    mol0_i = None
+    # This is rather confusing. If Zp > 1, then it would make sense to
+    # determine which axis definitions work for which molecules.
+    # The code probably does not work for axes operating on different molecules
+    # The 'central label' seems unnecessary
     if Zp == 1:
         mol0_i = 0
     else:
+        mol0_i = None
         cl = args.central_label
         for i, m in enumerate(mols):
             if cl in m.get_array('site_labels'):
                 mol0_i = i
                 break
+        if mol0_i is None:
+            raise RuntimeError("Must specify a central label for systems with "
+                               "Z' > 1")
 
-    if mol0_i is None:
-        raise RuntimeError("Must specify a central label for systems with "
-                           "Z' > 1")
-
-    # Find the origin
+    # Find the centre of mass
     mol0_com = mol_coms[mol0_i]
 
-    # Find the necessary molecules
+    # Determine the shape of supercell required to include a given radius
+    # Not related to molecules at this stage.
     scell = minimum_supcell(R, structure.get_cell())
+    # xyz is supercell grid (offset from 0,0,0?) in Cartesian co-ordinates
+    # fxy in fractional
     fxyz, xyz = supcell_gridgen(structure.get_cell(), scell)
 
+    # Determine distances between CoM of each molecule combined
+    # with each supercell offset and CoM of reference molecule
     mol_dists = np.linalg.norm(mol_coms[:, None, :]-mol0_com+xyz[None, :, :],
                                axis=-1)
+    # Identify indices of molecules (within mol_dists) that lie within radius
+    # excluding reference molecule (zero distance)
+    # Note latter test assumes no rounding errors introduced
+    # Should be obvious if this goes wrong
     sphere_i = np.where((mol_dists <= R)*(mol_dists > 0))
 
+    # For Z' > 1, skip over axes that are not valid for molecule
+    # Apparently no check that axes are valid for at least one molecule in
+    # asymmetric unit, i.e. code is flawed / surprising for Z' > 1
+    ignoreinvalid = (Zp > 1)
+
     # Always start with the centre
-    rmols = [RotatingMolecule(structure, mols[mol0_i], axes=axes)]
+    rmols = [RotatingMolecule(structure, mols[mol0_i], axes, ignoreinvalid=ignoreinvalid)]
+    # Now create RotatingMolecule objects for the `other' molecules
     for mol_i, cell_i in zip(*sphere_i):
-        rmol = RotatingMolecule(structure, mols[mol_i], fxyz[cell_i], axes)
-        rmols.append(rmol)
+        rmols.append(RotatingMolecule(structure, mols[mol_i], axes,
+                        fxyz[cell_i], ignoreinvalid=ignoreinvalid))
 
     print("Number of molecules for intermolecular interactions: "
-          "{}".format(len(rmols[1:])))
+          "{}".format(len(rmols)-1))
 
     # Now go on to compute the actual couplings
     rmols_rotpos = [rmol.atoms_rot_positions(element) for rmol in rmols]
