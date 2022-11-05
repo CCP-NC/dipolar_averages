@@ -312,6 +312,8 @@ class RotatingMolecule(object):
         Element labels of atoms of `s`
     labels : array of string
         Site labels of atoms of `s`
+    rot_positions : array of array of 3-vectors
+        All atomic positions rotated through each combination of rotations
 
     Notes
     -----
@@ -328,11 +330,28 @@ class RotatingMolecule(object):
 
     All atomic positions in molecule are evaluated, even though only a subset
     corresponding to selected isotope are needed. Similarly symbols, labels
-    arrays duplicate information.
+    arrays duplicate information. It might be cleaner to have an overall
+    super object factoring out common information.
    """
 
     def __init__(self, s, mol, axes, ijk=[0, 0, 0],
                  ignoreinvalid=False, checkcommuting=True):
+        """
+        Parameters
+        ----------
+        s : ASE Atoms object
+            Initial structure object
+        mol : AtomSelection
+            Selector for molecule of interest
+        axes : list of RotationAxis objects
+            Axis definitions (empty list corresponds to no rotation)
+        ijk : 3-vector, optional
+            Cell offset in fractional co-ordinates. Default is no offset
+        ignoreinvalid : bool
+            Ignore axes that are invalid for this molecule (default `False`)
+        checkcommuting : bool
+            Apply commutation test to axes (see Notes). Default is `True`
+        """
 
         self.cell = s.get_cell()
         self.s = mol.subset(s, use_cell_indices=True)
@@ -370,7 +389,7 @@ class RotatingMolecule(object):
                     if not np.isclose(np.linalg.norm(comm), 0.0):
                         raise ValueError('Molecule has non-commuting rotations')
             if verbose:
-                print("Axis commutation checked passed")
+                print("Axis commutation check passed")
 
         def expand_rotation(x, R, o, n):
             """ Internal function to generate set of positions corresponding
@@ -406,17 +425,12 @@ class RotatingMolecule(object):
             rot_positions = []
             for p in self.positions:
                 all_rotations = [p]
-
-                # Define all the combined rotations
-                # Looks weird - add some verbose output
+                # successively apply rotations to initial point
                 for rot_def in self.rotations:
                     all_rotations = [expand_rotation(x, *rot_def)
                                      for x in all_rotations]
-                    all_rotations = np.concatenate(all_rotations)
+                    all_rotations = np.concatenate(all_rotations) # Some kind of flattening?
                 rot_positions.append(all_rotations)
-
-            if verbose:
-                print("Number of rotation positions: {}".format(len(rot_positions)))
 
         self.rot_positions = np.array(rot_positions)
 
