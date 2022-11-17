@@ -19,16 +19,17 @@ from soprano.nmr.utils import _get_isotope_data, _dip_constant
 from soprano.properties.linkage import Molecules, MoleculeCOM
 from soprano.utils import minimum_supcell, supcell_gridgen
 
-from ase import io
+from ase import io, Atoms
 from ase.quaternions import Quaternion
 
 verbose = 0
 
+
 #np.seterr(all='raise')
 
 # Typical command line arguments:
-# TRIAMT01_geomopt-out.cif
-
+# --radius 10 --axis C1,C53:2 -v ../TRIAMT01_geomopt-out.cif
+# --radius 1 -v TEST --axis H1,C1:3
 
 def read_with_labels(fname):
     """ Loads a structure using ASE, ensuring that site labels are present.
@@ -104,52 +105,87 @@ def molecule_crystallographic_types(struct):
     return mols, mol_types
 
 
-def average_dipolar_tensor(p1, p2, gamma, intra=False):
-    """Average dipolar tensor from a range of positions
-    for two spins of given gamma. If intra=True, considers
-    the two spins part of the same molecule and thus rotating together.
+def average_dipolar_tensor(p1, p2, gamma, intramolecular):
+    """Average dipolar tensor from a range of positions for two spins
 
-    Returns values in kHz.
+    Parameters
+    ----------
+    p1 : numpy 1D array of 3-vectors
+        Positions of atom 1
+    p2 : numpy 1D array of 3-vectors
+        Positions of atom 2
+    gamma : scalar
+        Common magnetogyric ratio
+    intramolecular : bool
+        If `True` the two spins are treated as part of the same molecule
+        and thus rotating together.
+
+    Returns
+    -------
+    NMRTensor object
+        Averaged dipolar coupling tensor (in kHz)
+
+    Notes
+    -----
+    Limited to homonuclear couplings (i.e. between same isotope) due to
+    common gamma. Uses internal Soprano function `_dip_constant` which should
+    be public. Axes are ordered using Haeberlen convention, which is not
+    typical for zero-trace tensors, but X vs. Y distinction is not significant
+    for calculation.
     """
 
-    p1 = np.array(p1)
-    p2 = np.array(p2)
-
-    if intra:
-        r = p2-p1
+    if intramolecular:
+        r = p2 - p1
     else:
+        # Urgh. Presumably evaluates all combinations of internuclear vectors
         r = (p2[:, None, :]-p1[None, :, :]).reshape((-1, 3))
 
     rnorm = np.linalg.norm(r, axis=-1)
+    # Evaluate dipolar coupling(s) (in kHz) and internuclear unit vectors
     r /= rnorm[:, None]
     d = _dip_constant(rnorm*1e-10, gamma, gamma)*1e-3
 
+    # Construct dipolar tensors (Cartesian 3 x 3 matrices) and average
     D = d[:, None, None]*(3*r[:, None, :]*r[:, :, None]-np.eye(3)[None])
     D = np.average(D, axis=0)
 
-    D = NMRTensor(D, order=NMRTensor.ORDER_HAEBERLEN)
+    # Convert to tensor object for readout
+    return NMRTensor(D, order=NMRTensor.ORDER_HAEBERLEN)
+
+
+def van_vleck_contribution(D, I, axis=None):
+    """Compute the Van Vleck second moment contribution of a (homonuclear)
+    dipolar tensor
+
+    Parameters
+    ----------
+    D : Soprano NMRTensor object
+        Dipolar tensor
+    I : float
+        Common I of spins involved
+    axis : 3-vector, optional
+        Axis of applied field direction. If `None`, an analytical powder
+        average value is returned.
+
+    Returns
+    -------
+    float :
+        Contribution to second moment (in kHz^2?)
+
+    Notes
+    -----
+    The eigenvalues are assumed to be ordered with the largest component at
+    index 2.
+   """
 
     d = D.eigenvalues[2]
     eta = D.asymmetry
-    z = D.eigenvectors[:, 2]
-    y = D.eigenvectors[:, 1]
-
-    return (d, z, eta, y)
-
-
-def van_vleck_contribution(d, z, eta, y, I, axis=None):
-    """Compute the Van Vleck second moment contribution of a dipolar tensor
-    given the largest (absolute) eigenvalue d, its eigenvector z, the
-    asymmetry eta, and the eigenvector y of the smallest (absolute) eigenvalue.
-    Needs also the magnitude of the spin, I.
-
-    Also takes an axis for an applied field direction. If missing, a powder
-    average is returned instead.
-    """
 
     if axis is not None:
-        ct = np.dot(axis, z)
-        cp = np.dot(axis, y)
+        Z = D.eigenvectors[:, 2]
+        Y = D.eigenvectors[:, 1]
+        ct = np.dot(axis, Z)
+        cp = np.dot(axis, Y)
 
         Bjk = d*(1.5*(1+eta/3)*(3*ct**2-1)/2+eta*(3*cp**2-1)/2.0)
         return I*(I+1)*Bjk**2/3.0
@@ -157,6 +193,36 @@ def van_vleck_contribution(d, z, eta, y, I, axis=None):
         B2 = d**2*(9/4*(1+eta/3)**2+eta**2-1.5*(1+eta/3)*eta)
         return I*(I+1)*B2/15.0
 
+def D2_contribution(D, axis=None):
+    """Compute the contribution of a (homonuclear) dipolar tensor to D^2
+
+    Parameters
+    ----------
+    D : Soprano NMRTensor object
+        Dipolar tensor
+    axis : 3-vector, optional
+        Axis of applied field direction. If `None`, an analytical powder
+        average value is returned.
+
+    Returns
+    -------
+    float :
+        Contribution to second moment (in kHz^2?)
+
+    Notes
+    -----
+    The eigenvalues are assumed to be ordered with the largest component at
+    index 2.
+   """
+
+    d = D.eigenvalues[2]
+    eta = D.asymmetry
+
+    if axis is not None:
+        raise RuntimeWarning("Not implemented")
+    else:
+        B2 = d**2*(9/4*(1+eta/3)**2+eta**2-1.5*(1+eta/3)*eta)
+        return (4/9)*B2
 
 class RotationAxis(object):
     """ Class defining an axis of rotation
@@ -312,8 +378,12 @@ class RotatingMolecule(object):
         Element labels of atoms of `s`
     labels : array of string
         Site labels of atoms of `s`
-    rot_positions : array of array of 3-vectors
+    rot_positions : 3-dimensional array
         All atomic positions rotated through each combination of rotations
+        First index is atom number, second is rotation index, last
+        dimension is 3-vector
+    selected_rotpos : list of tuples of (atom label, atom position)
+        Resclicing of `rot_positions` selecting only `element`
 
     Notes
     -----
@@ -331,10 +401,11 @@ class RotatingMolecule(object):
     All atomic positions in molecule are evaluated, even though only a subset
     corresponding to selected isotope are needed. Similarly symbols, labels
     arrays duplicate information. It might be cleaner to have an overall
-    super object factoring out common information.
-   """
+    super object factoring out common information. Should be easier now that
+    element is passed to initialiser.
+    """
 
-    def __init__(self, s, mol, axes, ijk=[0, 0, 0],
+    def __init__(self, s, mol, axes, ijk=[0, 0, 0], element=None,
                  ignoreinvalid=False, checkcommuting=True):
         """
         Parameters
@@ -347,6 +418,8 @@ class RotatingMolecule(object):
             Axis definitions (empty list corresponds to no rotation)
         ijk : 3-vector, optional
             Cell offset in fractional co-ordinates. Default is no offset
+        element : character
+            Select atom type (optional). `None` corresponds to all atoms
         ignoreinvalid : bool
             Ignore axes that are invalid for this molecule (default `False`)
         checkcommuting : bool
@@ -391,33 +464,6 @@ class RotatingMolecule(object):
             if verbose:
                 print("Axis commutation check passed")
 
-        def expand_rotation(x, R, o, n):
-            """ Internal function to generate set of positions corresponding
-            to rotation about :math:`C_n`
-
-            Parameters
-            ----------
-            x : 3-vector
-                Starting position (Cartesian axes)
-            R : 3 x 3 array
-                Rotation matrix
-            o : 3-vector
-                Origin (point on rotation axis)
-            n : integer
-                `n` of :math:`C_n`, where `n` is guaranteed to be >1
-
-            Returns
-            -------
-            array of 3-vectors:
-                Set of `n` positions
-            """
-            all_rotations = [x]
-            for _ in range(1, n):
-                x = all_rotations[-1]
-                x = (R @ (x-o)) + o
-                all_rotations.append(x)
-            return np.array(all_rotations)
-
         if len(self.rotations) == 0:
             # Just regular positions...
             rot_positions = self.positions[:, None, :]
@@ -427,20 +473,47 @@ class RotatingMolecule(object):
                 all_rotations = [p]
                 # successively apply rotations to initial point
                 for rot_def in self.rotations:
-                    all_rotations = [expand_rotation(x, *rot_def)
+                    all_rotations = [self._expand_rotation(x, *rot_def)
                                      for x in all_rotations]
                     all_rotations = np.concatenate(all_rotations) # Some kind of flattening?
                 rot_positions.append(all_rotations)
 
         self.rot_positions = np.array(rot_positions)
 
-    def atoms_rot_positions(self, element=None):
-
         if element:
             indices = np.where(self.symbols == element)[0]
         else:
             indices = np.arange(len(self.s))
-        return [(self.labels[i], self.rot_positions[i]) for i in indices]
+        self.selected_rotpos = [(self.labels[i], self.rot_positions[i]) for i in indices]
+
+
+    @staticmethod
+    def _expand_rotation(x, R, o, n):
+        """ Internal function to generate set of positions corresponding
+        to rotation about :math:`C_n`
+
+        Parameters
+        ----------
+        x : 3-vector
+            Starting position (Cartesian axes)
+        R : 3 x 3 array
+            Rotation matrix
+        o : 3-vector
+            Origin (point on rotation axis)
+        n : integer
+            `n` of :math:`C_n`, where `n` is guaranteed to be >1
+
+        Returns
+        -------
+        array of 3-vectors:
+            Set of `n` positions
+        """
+        all_rotations = [x]
+        for _ in range(1, n):
+            x = all_rotations[-1]
+            x = (R @ (x-o)) + o
+            all_rotations.append(x)
+        return np.array(all_rotations)
 
 
 if __name__ == "__main__":
@@ -483,7 +556,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
     verbose = args.verbose
 
-    structure = read_with_labels(args.structure)
+    testmode = args.structure.startswith("TEST")
+    if testmode:
+        cell_dimensions = [3.0, 4.0, 5.0]
+        structure = Atoms(['H', 'H', 'C'],
+                       positions=[(1.0, 1.0, 1.0), (2.0, 1.0, 1.0), (1.0, 2.0, 1.0)],
+                       cell=cell_dimensions,  # orthorhombic cell
+                       pbc=True)
+        structure.new_array('site_labels', np.array(['H1', 'H2', 'C1']))
+    else:
+        structure = read_with_labels(args.structure)
 
     # Orientation
     if args.euler_rotation is None:
@@ -506,7 +588,11 @@ if __name__ == "__main__":
     axes += [RotationAxis(a, True) for a in args.CoMaxes]
 
     # Find molecules
-    mols, mol_types = molecule_crystallographic_types(structure)
+    if testmode:
+        mols = Molecules.get(structure)
+        mol_types = {None: mols}
+    else:
+        mols, mol_types = molecule_crystallographic_types(structure)
     mol_coms = MoleculeCOM.get(structure)
 
     # Types of molecule?
@@ -561,79 +647,84 @@ if __name__ == "__main__":
     ignoreinvalid = (Zp > 1)
 
     # Always start with the centre
-    rmols = [RotatingMolecule(structure, mols[mol0_i], axes, ignoreinvalid=ignoreinvalid)]
+    rmols = [RotatingMolecule(structure, mols[mol0_i], axes, element=element, ignoreinvalid=ignoreinvalid)]
     # Now create RotatingMolecule objects for the `other' molecules
     for mol_i, cell_i in zip(*sphere_i):
-        rmols.append(RotatingMolecule(structure, mols[mol_i], axes,
-                        fxyz[cell_i], ignoreinvalid=ignoreinvalid))
+        rmols.append(RotatingMolecule(structure, mols[mol_i], axes, fxyz[cell_i],
+                        element=element, ignoreinvalid=ignoreinvalid))
 
     print("Number of molecules for intermolecular interactions: "
           "{}".format(len(rmols)-1))
 
     # Now go on to compute the actual couplings
-    rmols_rotpos = [rmol.atoms_rot_positions(element) for rmol in rmols]
+    # rmols_rotpos = [rmol.atoms_rot_positions(element) for rmol in rmols]
 
-    rmol0_rotpos = rmols_rotpos[0]
+    rmol0_rotpos = rmols[0].selected_rotpos
 
-    intra_moments = np.zeros(len(rmol0_rotpos))
-    inter_moments = np.zeros(len(rmol0_rotpos))
+    natoms = len(rmol0_rotpos)
+    intra_moments = np.zeros(natoms)
+    inter_moments = np.zeros(natoms)
 
-    for i, (l1, p1) in enumerate(rmol0_rotpos):
+    for i, (_, pos1) in enumerate(rmol0_rotpos):
 
         # Intramolecular couplings
-        for j, (l2, p2) in enumerate(rmol0_rotpos[i+1:]):
-            D = average_dipolar_tensor(p1, p2, el_gamma, True)
-            vv2 = van_vleck_contribution(*D, el_I, B_axis)
+        for j, (_, pos2) in enumerate(rmol0_rotpos[i+1:]):
+            D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=True)
+            D2 = D2_contribution(D, B_axis)
 
-            intra_moments[i] += vv2
-            intra_moments[i+j+1] += vv2
+            # Add contribution to intramolecular sum for both spins
+            intra_moments[i] += D2
+            intra_moments[i+j+1] += D2
 
         # For everything else we can't save time the same way
-        for rmol_apos in rmols_rotpos[1:]:
-            for l2, p2 in rmol_apos:
-                D = average_dipolar_tensor(p1, p2, el_gamma)
-                vv2 = van_vleck_contribution(*D, el_I, B_axis)
-                inter_moments[i] += vv2
+        for rmol2 in rmols[1:]:
+            rmol2_rotpos = rmol2.selected_rotpos
+            for _, pos2 in rmol2_rotpos:
+                D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=False)
+                inter_moments[i] += D2_contribution(D, B_axis)
 
     intra_moments_dict = defaultdict(list)
     inter_moments_dict = defaultdict(list)
-    for i, m in enumerate(intra_moments):
-        l = rmol0_rotpos[i][0]
-        intra_moments_dict[l].append(m)
-        inter_moments_dict[l].append(inter_moments[i])
-
-    def getstats(moments):
-        mean = np.mean(moments)
-        if np.isclose(mean, 0):
-            return mean, 0
-        frac = (max(moments)-min(moments))/mean
-        return mean, frac
+    for i in range(natoms):
+        lab = rmol0_rotpos[i][0]
+        intra_moments_dict[lab].append(intra_moments[i])
+        inter_moments_dict[lab].append(inter_moments[i])
 
     print("Label\tIntra-drss/kHz\tInter-drss/kHz")
 
     if args.nomerge:
-        for i, intram in enumerate(intra_moments):
-            l = rmol0_rotpos[i][0]
+        for i in range(natoms):
+            lab = rmol0_rotpos[i][0]
+            intram = intra_moments[i]
             interm = inter_moments[i]
-            print("{}\t{:.4f}\t{:.4f}".format(l, intram**0.5, interm**0.5))
+            print("{}\t{:.2f}\t{:.2f}".format(lab, intram**0.5, interm**0.5))
     else:
-        for l, intram in intra_moments_dict.items():
+        def getstats(vals):
+            """ Return average of values that are expected to be same within
+            rounding error (+range as fraction) """
+
+            mean = np.mean(vals)
+            if np.isclose(mean, 0):
+                return mean, 0
+            frac = (max(vals)-min(vals))/mean
+            return mean, frac
+
+        for lab, intram in intra_moments_dict.items():
             intra_mean, intra_frac = getstats(intram)
-            inter_mean, inter_frac = getstats(inter_moments_dict[l])
+            inter_mean, inter_frac = getstats(inter_moments_dict[lab])
 
-            m1, pc1, m2, pc2 = (intra_mean**0.5,
-                                100.*intra_frac,
-                                inter_mean**0.5,
-                                100.*inter_frac)
-            print("{}\t{:.4f} ({:.2f}%)\t{:.4f} ({:.2f}%)".format(l, m1, pc1,
-                                                                  m2, pc2))
+            print("{}\t{:.2f} ({:.2f}%)\t{:.2f} ({:.2f}%)".format(lab,
+                                intra_mean**0.5, 100.*intra_frac,
+                                inter_mean**0.5, 100.*inter_frac))
 
-    total_dRSS_intra = np.mean(intra_moments)**0.5
-    total_dRSS_inter = np.mean(inter_moments)**0.5
-    total_dRSS = np.mean(intra_moments+inter_moments)**0.5
+    mean_dSS_intra = np.mean(intra_moments)
+    mean_dSS_inter = np.mean(inter_moments)
+    total_dSS = mean_dSS_intra + mean_dSS_inter
 
-    print("Intramolecular contribution to mean d_RSS: {:g} kHz".format(
-        total_dRSS_intra))
-    print("Intermolecular contribution to mean d_RSS at "
-          "{:g} Å: {:g} kHz".format(R, total_dRSS_inter))
-    print("Overall d_RSS: {:g} kHz".format(total_dRSS))
+    print("Intramolecular contribution to mean d_SS: {:.2f} kHz^2".format(
+        mean_dSS_intra))
+    print("Intermolecular contribution to mean d_SS at "
+          "{:g} Å: {:.2f} kHz^2".format(R, mean_dSS_inter))
+    print("Overall mean d_SS: {:.2f} kHz^2    Mean d_RSS {:.2f} kHz".format(total_dSS, total_dSS**0.5))
+    M2 = (3.0/20)*total_dSS*el_I*(el_I+1)
+    print("Second moment: {:.2f} kHz^2".format(M2))
