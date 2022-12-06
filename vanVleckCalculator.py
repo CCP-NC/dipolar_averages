@@ -10,6 +10,7 @@ Made by Simone Sturniolo and Paul Hodgkinson for CCP-NC (2021)
 
 import re
 import warnings
+import sys
 import argparse as ap
 import numpy as np
 
@@ -24,11 +25,26 @@ from ase.quaternions import Quaternion
 
 verbose = 0
 
+# dSS values from sites with the same CIF label are expected to be equivalent
+# This sets the fractional tolerance, and can be quite low due to analytical
+# calculation
+dSS_equiv_rtol = 1e-7
+
+# Ordering convention for dipolar tensors.
+# Confirmed not to affect calculated results
+dipole_tensor_convention = NMRTensor.ORDER_NQR  # HAEBERLEN
 
 #np.seterr(all='raise')
 
 # Typical command line arguments:
-# --radius 10 --axis C1,C53:2 -v ../TRIAMT01_geomopt-out.cif
+# --radius 20 --axis C1,C53:2 -v ../TRIAMT01_geomopt-out.cif
+# Pseudo C2 (short)
+# --radius 20 --CoMaxis C5:2 -v ../TRIAMT01_geomopt-out.cif
+# Pseudo C2 (long)
+# --radius 20 --CoMaxis C29:2 -v ../TRIAMT01_geomopt-out.cif
+# --radius 20 ../CONGRSrelaxed_geomopt-out.cif
+# C3 axis
+# --radius 20 --axis C1:3 ../CONGRSrelaxed_geomopt-out.cif
 # --radius 1 -v TEST --axis H1,C1:3
 
 def read_with_labels(fname):
@@ -129,9 +145,8 @@ def average_dipolar_tensor(p1, p2, gamma, intramolecular):
     -----
     Limited to homonuclear couplings (i.e. between same isotope) due to
     common gamma. Uses internal Soprano function `_dip_constant` which should
-    be public. Axes are ordered using Haeberlen convention, which is not
-    typical for zero-trace tensors, but X vs. Y distinction is not significant
-    for calculation.
+    be public. Axes are ordered according to `dipole_tensor_convention` (global),
+    but X vs. Y distinction is not significant for calculation.
     """
 
     if intramolecular:
@@ -150,7 +165,7 @@ def average_dipolar_tensor(p1, p2, gamma, intramolecular):
     D = np.average(D, axis=0)
 
     # Convert to tensor object for readout
-    return NMRTensor(D, order=NMRTensor.ORDER_HAEBERLEN)
+    return NMRTensor(D, order=dipole_tensor_convention)
 
 
 def van_vleck_contribution(D, I, axis=None):
@@ -176,7 +191,7 @@ def van_vleck_contribution(D, I, axis=None):
     -----
     The eigenvalues are assumed to be ordered with the largest component at
     index 2.
-   """
+    """
 
     d = D.eigenvalues[2]
     eta = D.asymmetry
@@ -222,7 +237,7 @@ def D2_contribution(D, axis=None):
         raise RuntimeWarning("Not implemented")
     else:
         B2 = d**2*(9/4*(1+eta/3)**2+eta**2-1.5*(1+eta/3)*eta)
-        return (4/9)*B2
+        return B2/9.0
 
 class RotationAxis(object):
     """ Class defining an axis of rotation
@@ -253,7 +268,7 @@ class RotationAxis(object):
         the wrong atoms. ``None`` disables check.
    """
 
-    def __init__(self, axis_str, force_com=False, off_com_tol=0.1):
+    def __init__(self, axis_str, force_com=False, perpendicular=False, off_com_tol=0.1):
         """
         Raises
         ------
@@ -283,6 +298,7 @@ class RotationAxis(object):
         self.a1 = a1
         self.a2 = a2
         self.force_com = force_com
+        self.perpendicular = perpendicular
         self.off_com_tol = off_com_tol
 
     def validate(self, rmol):
@@ -332,6 +348,15 @@ class RotationAxis(object):
 
         v = p2 - p1
         v /= np.linalg.norm(v)  # unit vector defining axis direction
+
+        if self.perpendicular:
+            notparallel = np.zeros((3))
+            maxind = np.argmax(abs(v))
+            notparallel[maxind] = v[maxind]
+            newv = np.cross(v, notparallel)
+            newv /= np.linalg.norm(newv)
+            print("Started with: {}.  New axis: {}".format(v, newv))
+            v = newv
 
         if self.force_com:
             # Force this to pass through the center of mass
@@ -460,7 +485,7 @@ class RotatingMolecule(object):
                     # Check that R1 and R2 commute
                     comm = R1 @ R2 - R2 @ R1
                     if not np.isclose(np.linalg.norm(comm), 0.0):
-                        raise ValueError('Molecule has non-commuting rotations')
+                        print('Warning: molecule has non-commuting rotations', file=sys.stderr)
             if verbose:
                 print("Axis commutation check passed")
 
@@ -537,6 +562,11 @@ if __name__ == "__main__":
                         default=[],
                         help="Specify an axis through Centre of "
                         "Mass as first_atom_label[,second_atom_label][:n]")
+    parser.add_argument('--perpCoMaxis', action='append', dest='perpCoMaxes',
+                        default=[],
+                        help="Specify an axis in plane of Centre of "
+                        "Mass and perpendicular to interatomic vector "
+                        "defined by first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--nomerge', dest='nomerge', action="store_true",
                         help="Don't merge results from sites with same label")
     parser.add_argument('--radius', '-r', dest="radius", type=float,
@@ -560,7 +590,7 @@ if __name__ == "__main__":
     if testmode:
         cell_dimensions = [3.0, 4.0, 5.0]
         structure = Atoms(['H', 'H', 'C'],
-                       positions=[(1.0, 1.0, 1.0), (2.0, 1.0, 1.0), (1.0, 2.0, 1.0)],
+                       positions=[(1.0, 1.0, 1.0), (2.75, 1.0, 1.0), (1.875, 1.5, 1.0)],
                        cell=cell_dimensions,  # orthorhombic cell
                        pbc=True)
         structure.new_array('site_labels', np.array(['H1', 'H2', 'C1']))
@@ -586,6 +616,7 @@ if __name__ == "__main__":
     # Parse axes. Note that application order shouldn't matter
     axes = [RotationAxis(a, False) for a in args.axes]
     axes += [RotationAxis(a, True) for a in args.CoMaxes]
+    axes += [RotationAxis(a, True, perpendicular=True) for a in args.perpCoMaxes]
 
     # Find molecules
     if testmode:
@@ -699,23 +730,26 @@ if __name__ == "__main__":
             interm = inter_moments[i]
             print("{}\t{:.2f}\t{:.2f}".format(lab, intram**0.5, interm**0.5))
     else:
-        def getstats(vals):
-            """ Return average of values that are expected to be same within
+        def checkequiv(vals):
+            """ Check the values are Return average of values that are expected to be same within
             rounding error (+range as fraction) """
 
             mean = np.mean(vals)
             if np.isclose(mean, 0):
-                return mean, 0
+                return mean
             frac = (max(vals)-min(vals))/mean
-            return mean, frac
+            if frac > dSS_equiv_rtol:
+                raise RuntimeError("Values from equivalent sites differ by "
+                                   "more than a fractional tolerance of {}. "
+                                   "Use --nomerge to investigate or increase "
+                                   "tolerance", dSS_equiv_rtol)
+            return mean
 
         for lab, intram in intra_moments_dict.items():
-            intra_mean, intra_frac = getstats(intram)
-            inter_mean, inter_frac = getstats(inter_moments_dict[lab])
+            intram = checkequiv(intram)
+            interm = checkequiv(inter_moments_dict[lab])
 
-            print("{}\t{:.2f} ({:.2f}%)\t{:.2f} ({:.2f}%)".format(lab,
-                                intra_mean**0.5, 100.*intra_frac,
-                                inter_mean**0.5, 100.*inter_frac))
+            print("{}\t{:.2f} \t{:.2f}".format(lab, intram**0.5, interm**0.5))
 
     mean_dSS_intra = np.mean(intra_moments)
     mean_dSS_inter = np.mean(inter_moments)
@@ -726,5 +760,6 @@ if __name__ == "__main__":
     print("Intermolecular contribution to mean d_SS at "
           "{:g} Å: {:.2f} kHz^2".format(R, mean_dSS_inter))
     print("Overall mean d_SS: {:.2f} kHz^2    Mean d_RSS {:.2f} kHz".format(total_dSS, total_dSS**0.5))
-    M2 = (3.0/20)*total_dSS*el_I*(el_I+1)
-    print("Second moment: {:.2f} kHz^2".format(M2))
+    M2scaling_factor = (3.0/5)*el_I*(el_I+1)
+    print("Second moment: {:.2f} (Intra: {:.2f}  Inter: {:.2f}) kHz^2".format(total_dSS*M2scaling_factor,
+                        mean_dSS_intra*M2scaling_factor, mean_dSS_inter*M2scaling_factor))
