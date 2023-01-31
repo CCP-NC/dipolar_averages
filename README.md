@@ -43,7 +43,9 @@ motions are always fast, the order in which multiple axes are given is not impor
 
 ## Usage
 
-The `--help` argument details the command line arguments and usage. A few clarifying points:
+`vanVleckCalculator.py --help` will give the command line arguments and usage. A few clarifying points:
+- Since H positioning is critical for quantitative results, either use neutron-diffraction structures,
+- or DFT-optimised structures, with H positions relaxed.
 - The symmetry of a rotation must be specified explictly, e.g. --axis C1,C2:2 denotes a two-fold jump motion
 about a vector between C1 and C2. No check is made against the symmetry of the molecule, so specifying a two-fold
 jump along an axis with 3-fold symmetry will **not** generate a warning!
@@ -55,3 +57,31 @@ Depending on the degree of convergence sought,
 there is little value in exceeding a radius of 20 Å. Note that a radius of 0
 can be used to effetively calculate second moments on isolated molecules.
 - The static (non-dynamic) limit is calculated when no axes are given.
+
+## Examples
+
+The **Examples** directory contains DFT-optimised structures for diamantane (CSD refcode CONGRS) and triamantane (refcode TRIAMT01), hence
+
+`vanVleckCalculator.py --radius 15 --axis C1:3 Examples/CONGRSrelaxed_geomopt-out.cif`
+
+will output
+
+>Structure analysed: Z = 4, Z' = 1<br>
+>Number of molecules for intermolecular interactions: 54<br>
+>Label	Intra-drss/kHz	Inter-drss/kHz<br>
+>H1	3.32 	12.06<br>
+>H9	13.56 	8.25<br>
+>H33	13.58 	8.41<br>
+>H57	11.17 	8.47<br>
+>Intramolecular contribution to mean d_SS: 148.98 kHz^2<br>
+>Intermolecular contribution to mean d_SS at 15 Å: 77.68 kHz^2<br>
+>Overall mean d_SS: 226.67 kHz^2    Mean d_RSS 15.06 kHz<br>
+>Second moment: 102.00 (Intra: 67.04  Inter: 34.96) kHz^2<br>
+
+In other words, the structure contains four molecules of diamantane in the unit cell, one unique molecule. 54 molecules are within 15 Å of the reference molecule. The following table gives the intramolecular and intermolecular contributions to the root-sum-square dipolar coupling at the 4 crystallographically distinct H sites. The final lines give the mean sum-square and root-sum-square couplings, followed by the corresponding second moments (proportional to the mean sum-square-coupling).
+
+## Contributing
+
+The code is being made available through GitHub to encourage further development. You are welcome to contribute to development by raising issues or forking your own version to develop and potentially merge back (through a pull request).
+
+
