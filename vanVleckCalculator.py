@@ -20,7 +20,7 @@ from soprano.nmr.utils import _get_isotope_data, _dip_constant
 from soprano.properties.linkage import Molecules, MoleculeCOM
 from soprano.utils import minimum_supcell, supcell_gridgen
 
-from ase import io, Atoms
+from ase import io
 from ase.quaternions import Quaternion
 
 verbose = 0
@@ -37,11 +37,11 @@ dipole_tensor_convention = NMRTensor.ORDER_NQR  # HAEBERLEN
 #np.seterr(all='raise')
 
 # Typical command line arguments:
-# --radius 20 --axis C1,C53:2 -v ../TRIAMT01_geomopt-out.cif
+# --radius 20 --axis C1,C53:2 ../TRIAMT01_geomopt-out.cif
 # Pseudo C2 (short)
-# --radius 20 --CoMaxis C5:2 -v ../TRIAMT01_geomopt-out.cif
+# --radius 20 --CoMaxis C5:2 ../TRIAMT01_geomopt-out.cif
 # Pseudo C2 (long)
-# --radius 20 --CoMaxis C29:2 -v ../TRIAMT01_geomopt-out.cif
+# --radius 20 --CoMaxis C29:2 ../TRIAMT01_geomopt-out.cif
 # --radius 20 ../CONGRSrelaxed_geomopt-out.cif
 # C3 axis
 # --radius 20 --axis C1:3 ../CONGRSrelaxed_geomopt-out.cif
@@ -168,45 +168,47 @@ def average_dipolar_tensor(p1, p2, gamma, intramolecular):
     return NMRTensor(D, order=dipole_tensor_convention)
 
 
-def van_vleck_contribution(D, I, axis=None):
-    """Compute the Van Vleck second moment contribution of a (homonuclear)
-    dipolar tensor
+# Original formulation matching the van Vleck derivation (rather than D_rss)
+#
+# def van_vleck_contribution(D, I, axis=None):
+#     """Compute the Van Vleck second moment contribution of a (homonuclear)
+#     dipolar tensor
 
-    Parameters
-    ----------
-    D : Soprano NMRTensor object
-        Dipolar tensor
-    I : float
-        Common I of spins involved
-    axis : 3-vector, optional
-        Axis of applied field direction. If `None`, an analytical powder
-        average value is returned.
+#     Parameters
+#     ----------
+#     D : Soprano NMRTensor object
+#         Dipolar tensor
+#     I : float
+#         Common I of spins involved
+#     axis : 3-vector, optional
+#         Axis of applied field direction. If `None`, an analytical powder
+#         average value is returned.
 
-    Returns
-    -------
-    float :
-        Contribution to second moment (in kHz^2?)
+#     Returns
+#     -------
+#     float :
+#         Contribution to second moment (in kHz^2?)
 
-    Notes
-    -----
-    The eigenvalues are assumed to be ordered with the largest component at
-    index 2.
-    """
+#     Notes
+#     -----
+#     The eigenvalues are assumed to be ordered with the largest component at
+#     index 2.
+#     """
 
-    d = D.eigenvalues[2]
-    eta = D.asymmetry
+#     d = D.eigenvalues[2]
+#     eta = D.asymmetry
 
-    if axis is not None:
-        Z = D.eigenvectors[:, 2]
-        Y = D.eigenvectors[:, 1]
-        ct = np.dot(axis, Z)
-        cp = np.dot(axis, Y)
+#     if axis is not None:
+#         Z = D.eigenvectors[:, 2]
+#         Y = D.eigenvectors[:, 1]
+#         ct = np.dot(axis, Z)
+#         cp = np.dot(axis, Y)
 
-        Bjk = d*(1.5*(1+eta/3)*(3*ct**2-1)/2+eta*(3*cp**2-1)/2.0)
-        return I*(I+1)*Bjk**2/3.0
-    else:
-        B2 = d**2*(9/4*(1+eta/3)**2+eta**2-1.5*(1+eta/3)*eta)
-        return I*(I+1)*B2/15.0
+#         Bjk = d*(1.5*(1+eta/3)*(3*ct**2-1)/2+eta*(3*cp**2-1)/2.0)
+#         return I*(I+1)*Bjk**2/3.0
+#     else:
+#         B2 = d**2*(9/4*(1+eta/3)**2+eta**2-1.5*(1+eta/3)*eta)
+#         return I*(I+1)*B2/15.0
 
 def D2_contribution(D, axis=None):
     """Compute the contribution of a (homonuclear) dipolar tensor to D^2
@@ -222,22 +224,23 @@ def D2_contribution(D, axis=None):
     Returns
     -------
     float :
-        Contribution to second moment (in kHz^2?)
+        Contribution to sum-square-coupling (in kHz^2)
 
     Notes
     -----
     The eigenvalues are assumed to be ordered with the largest component at
-    index 2.
+    index 2, corresponding to 2D
    """
 
-    d = D.eigenvalues[2]
+    d = 0.5* D.eigenvalues[2]
     eta = D.asymmetry
 
     if axis is not None:
         raise RuntimeWarning("Not implemented")
     else:
-        B2 = d**2*(9/4*(1+eta/3)**2+eta**2-1.5*(1+eta/3)*eta)
-        return B2/9.0
+#        B2 = d**2*(9/4*(1+eta/3)**2+eta**2-1.5*(1+eta/3)*eta)
+#       return B2/9.0
+        return (d**2)*(1 + (eta**2)/3.0)
 
 class RotationAxis(object):
     """ Class defining an axis of rotation
@@ -355,7 +358,7 @@ class RotationAxis(object):
             notparallel[maxind] = v[maxind]
             newv = np.cross(v, notparallel)
             newv /= np.linalg.norm(newv)
-            print("Started with: {}.  New axis: {}".format(v, newv))
+#            print("Started with: {}.  New axis: {}".format(v, newv))
             v = newv
 
         if self.force_com:
@@ -572,43 +575,40 @@ if __name__ == "__main__":
     parser.add_argument('--radius', '-r', dest="radius", type=float,
                         default=10.0,
                         help="Radius over which to include molecules (in Å)")
-    parser.add_argument('--euler_rotation', '-er', dest="euler_rotation",
-                        nargs=3, type=float,
-                        help="Calculate for single orientation (rather than "
-                        "powder) with an overall rotation of crystal"
-                        "system expressed as ZYZ Euler angles in degrees")
-#    parser.add_argument('--powder', '-p', dest="powder", action="store_true",
-#                        default=False,
-#                        help="Use powder averaging for all second moments")
+#    parser.add_argument('--euler_rotation', '-er', dest="euler_rotation",
+#                        nargs=3, type=float,
+#                        help="Calculate for single orientation (rather than "
+#                        "powder) with an overall rotation of crystal"
+#                        "system expressed as ZYZ Euler angles in degrees")
     parser.add_argument('--verbose', '-v', default=0,
                         help="Increase verbosity", action='count')
 
     args = parser.parse_args()
     verbose = args.verbose
 
-    testmode = args.structure.startswith("TEST")
-    if testmode:
-        cell_dimensions = [3.0, 4.0, 5.0]
-        structure = Atoms(['H', 'H', 'C'],
-                       positions=[(1.0, 1.0, 1.0), (2.75, 1.0, 1.0), (1.875, 1.5, 1.0)],
-                       cell=cell_dimensions,  # orthorhombic cell
-                       pbc=True)
-        structure.new_array('site_labels', np.array(['H1', 'H2', 'C1']))
-    else:
-        structure = read_with_labels(args.structure)
+    # testmode = args.structure.startswith("TEST")
+    # if testmode:
+    #     cell_dimensions = [3.0, 4.0, 5.0]
+    #     structure = Atoms(['H', 'H', 'C'],
+    #                    positions=[(1.0, 1.0, 1.0), (2.75, 1.0, 1.0), (1.875, 1.5, 1.0)],
+    #                    cell=cell_dimensions,  # orthorhombic cell
+    #                    pbc=True)
+    #     structure.new_array('site_labels', np.array(['H1', 'H2', 'C1']))
+    # else:
+    structure = read_with_labels(args.structure)
 
-    # Orientation
-    if args.euler_rotation is None:
-        B_axis = None
-    else:
-        B_axis = np.array([0, 0, 1.0])
-        euler = np.array(args.euler_rotation)*np.pi/180.0
-        rotation_quat = Quaternion.from_euler_angles(*euler)
-        axis, angle = rotation_quat.axis_angle()
-        structure.rotate(180/np.pi*angle, v=axis, rotate_cell=True)
+    B_axis = None
+    # Sngle crystal orientation - not supported
+    # if args.euler_rotation:
+    #     B_axis = np.array([0, 0, 1.0])
+    #     euler = np.array(args.euler_rotation)*np.pi/180.0
+    #     rotation_quat = Quaternion.from_euler_angles(*euler)
+    #     axis, angle = rotation_quat.axis_angle()
+    #     structure.rotate(180/np.pi*angle, v=axis, rotate_cell=True)
 
     # NMR data
     # Not ideal - should be isotope rather than element based
+    # [0] element is most abundant isotope
     element = args.element
     el_I = _get_isotope_data([element], 'I')[0]
     el_gamma = _get_isotope_data([element], 'gamma')[0]
@@ -619,11 +619,11 @@ if __name__ == "__main__":
     axes += [RotationAxis(a, True, perpendicular=True) for a in args.perpCoMaxes]
 
     # Find molecules
-    if testmode:
-        mols = Molecules.get(structure)
-        mol_types = {None: mols}
-    else:
-        mols, mol_types = molecule_crystallographic_types(structure)
+    # if testmode:
+    #     mols = Molecules.get(structure)
+    #     mol_types = {None: mols}
+    # else:
+    mols, mol_types = molecule_crystallographic_types(structure)
     mol_coms = MoleculeCOM.get(structure)
 
     # Types of molecule?
@@ -731,8 +731,8 @@ if __name__ == "__main__":
             print("{}\t{:.2f}\t{:.2f}".format(lab, intram**0.5, interm**0.5))
     else:
         def checkequiv(vals):
-            """ Check the values are Return average of values that are expected to be same within
-            rounding error (+range as fraction) """
+            """ Check values that are expected to be same within rounding error
+            (+range as fraction) and return average """
 
             mean = np.mean(vals)
             if np.isclose(mean, 0):
