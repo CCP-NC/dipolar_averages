@@ -1,5 +1,4 @@
 # dipolar_averages
-Python script for calculating dipolar 2nd moments under molecular motion.
 
 **vanVleckCalculator.py** is a Python script for calculating the "second moment" of NMR lineshapes
 for organic molecules in the limiting conditions of no molecular motion or motion that is
