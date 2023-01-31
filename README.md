@@ -1,5 +1,5 @@
 # dipolar_averages
-Python scripts for calculating dipolar 2nd moments under molecular motion
+Python script for calculating dipolar 2nd moments under molecular motion.
 
 **vanVleckCalculator.py** is a Python script for calculating the "second moment" of NMR lineshapes
 for organic molecules in the limiting conditions of no molecular motion or motion that is
@@ -55,7 +55,3 @@ Depending on the degree of convergence sought,
 there is little value in exceeding a radius of 20 Å. Note that a radius of 0
 can be used to effetively calculate second moments on isolated molecules.
 - The static (non-dynamic) limit is calculated when no axes are given.
-
-
-
-
