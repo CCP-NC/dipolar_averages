@@ -5,7 +5,7 @@
 A script to compute and average the Van Vleck second moments in molecular
 crystals, including the effects of rotational motion.
 
-Made by Simone Sturniolo and Paul Hodgkinson for CCP-NC (2021)
+Made by Simone Sturniolo and Paul Hodgkinson for CCP-NC (2021-23)
 """
 
 import re
@@ -32,7 +32,7 @@ dSS_equiv_rtol = 1e-7
 
 # Ordering convention for dipolar tensors.
 # Confirmed not to affect calculated results
-dipole_tensor_convention = NMRTensor.ORDER_NQR  # HAEBERLEN
+dipole_tensor_convention = NMRTensor.ORDER_NQR
 
 #np.seterr(all='raise')
 
@@ -358,7 +358,6 @@ class RotationAxis(object):
             notparallel[maxind] = v[maxind]
             newv = np.cross(v, notparallel)
             newv /= np.linalg.norm(newv)
-#            print("Started with: {}.  New axis: {}".format(v, newv))
             v = newv
 
         if self.force_com:
@@ -550,23 +549,23 @@ if __name__ == "__main__":
     parser.add_argument('structure',
                         help="A structure file containing site labels in an "
                         "ASE readable format, typically .cif")
-    parser.add_argument('--element', '-e', default='H', dest='element',
+    parser.add_argument('--element', default='H', dest='element',
                         help="Element for which to compute the (homonuclear) "
-                        "dipolar couplings")
+                        "dipolar couplings (default H)")
     parser.add_argument('--central_label', '-c', default=None,
-                        dest='central_label',
+                        dest='central_label', metavar = 'LABEL',
                         help="Crystallographic label of atom to use to define"
                         " a central molecule in case of more than one type")
-    parser.add_argument('--axis', '-a', action='append', dest='axes',
-                        default=[],
+    parser.add_argument('--axis', action='append', dest='axes',
+                        default=[], metavar = 'AXIS',
                         help="Specify an axis through "
                         "first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--CoMaxis', action='append', dest='CoMaxes',
-                        default=[],
+                        default=[], metavar = 'AXIS',
                         help="Specify an axis through Centre of "
                         "Mass as first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--perpCoMaxis', action='append', dest='perpCoMaxes',
-                        default=[],
+                        default=[], metavar = 'AXIS',
                         help="Specify an axis in plane of Centre of "
                         "Mass and perpendicular to interatomic vector "
                         "defined by first_atom_label[,second_atom_label][:n]")
@@ -606,9 +605,6 @@ if __name__ == "__main__":
     #     axis, angle = rotation_quat.axis_angle()
     #     structure.rotate(180/np.pi*angle, v=axis, rotate_cell=True)
 
-    # NMR data
-    # Not ideal - should be isotope rather than element based
-    # [0] element is most abundant isotope
     element = args.element
     el_I = _get_isotope_data([element], 'I')[0]
     el_gamma = _get_isotope_data([element], 'gamma')[0]
@@ -619,14 +615,9 @@ if __name__ == "__main__":
     axes += [RotationAxis(a, True, perpendicular=True) for a in args.perpCoMaxes]
 
     # Find molecules
-    # if testmode:
-    #     mols = Molecules.get(structure)
-    #     mol_types = {None: mols}
-    # else:
     mols, mol_types = molecule_crystallographic_types(structure)
     mol_coms = MoleculeCOM.get(structure)
 
-    # Types of molecule?
     Z = len(mols)
     Zp = len(mol_types)
 
@@ -688,7 +679,6 @@ if __name__ == "__main__":
           "{}".format(len(rmols)-1))
 
     # Now go on to compute the actual couplings
-    # rmols_rotpos = [rmol.atoms_rot_positions(element) for rmol in rmols]
 
     rmol0_rotpos = rmols[0].selected_rotpos
 
