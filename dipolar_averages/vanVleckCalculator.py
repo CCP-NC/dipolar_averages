@@ -543,8 +543,9 @@ class RotatingMolecule(object):
         return np.array(all_rotations)
 
 
-if __name__ == "__main__":
-
+def cli():
+    """ Command line interface for dipolar_couplings.py
+    """
     parser = ap.ArgumentParser()
     parser.add_argument('structure',
                         help="A structure file containing site labels in an "
@@ -753,3 +754,9 @@ if __name__ == "__main__":
     M2scaling_factor = (3.0/5)*el_I*(el_I+1)
     print("Second moment: {:.2f} (Intra: {:.2f}  Inter: {:.2f}) kHz^2".format(total_dSS*M2scaling_factor,
                         mean_dSS_intra*M2scaling_factor, mean_dSS_inter*M2scaling_factor))
+
+
+if __name__ == "__main__":
+    # call  the cli
+    cli()
+

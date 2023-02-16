@@ -1,6 +1,6 @@
 # dipolar_averages
 
-**vanVleckCalculator.py** is a Python script for calculating the "second moment" of NMR lineshapes
+**`dipolar_averages/vanVleckCalculator.py`** is a Python script for calculating the "second moment" of NMR lineshapes
 for organic molecules in the limiting conditions of no molecular motion or motion that is
 fast compared to the linewidth.
 
@@ -8,9 +8,39 @@ The script uses the [Soprano](https://ccp-nc.github.io/soprano/intro.html) libra
 is built on the [Atomic Simulation Environment (ASE)](https://wiki.fysik.dtu.dk/ase/). Installing
 Soprano, e.g. with `pip install soprano` will automatically install ASE.
 
-**AverageUnitTest.py** is a test program that confirms that the analytical formula for the orientationally
+**`tests/AverageUnitTest.py`** is a test program that confirms that the analytical formula for the orientationally
 averaged root-mean-square dipolar coupling used in the main script gives the same result as an explicit 
 numerical powder integration. It is supporting information only.
+
+## Installation
+
+It's best to install the package in a virtual environment, e.g. using `virtualenv` or `conda`.
+Instructions for installing and using `virtualenv` can be found [here](https://virtualenv.pypa.io/en/latest/installation.html).
+
+Once you have a virtual environment set up, clone the repository with
+
+`git clone https://github.com/CCP-NC/dipolar_averages.git`
+
+After obtaining the code, install the dependencies with
+
+`pip install .`
+
+from the top-level directory (i.e. where this `README.md` file is). 
+
+
+*Alternatively*, you can install the package directly from GitHub with
+
+`pip install git+https://github.com/CCP-NC/dipolar_averages.git`
+
+
+This will install the `dipolar_averages` package, which contains the
+`vanVleckCalculator` script. It will add this script to the path, so it can be run from anywhere. You can check that it is installed correctly by running:
+
+`vanVleckCalculator --help`
+
+and you should see the usage information.
+
+
 
 ## Overview
 
@@ -42,7 +72,7 @@ motions are always fast, the order in which multiple axes are given is not impor
 
 ## Usage
 
-`vanVleckCalculator.py --help` will give the command line arguments and usage. A few clarifying points:
+`vanVleckCalculator --help` will give the command line arguments and usage. A few clarifying points:
 - Since H positioning is critical for quantitative results, either use neutron-diffraction structures,
 - or DFT-optimised structures, with H positions relaxed.
 - The symmetry of a rotation must be specified explictly, e.g. --axis C1,C2:2 denotes a two-fold jump motion
@@ -61,7 +91,7 @@ can be used to effetively calculate second moments on isolated molecules.
 
 The **Examples** directory contains DFT-optimised structures for diamantane (CSD refcode CONGRS) and triamantane (refcode TRIAMT01), hence
 
-`vanVleckCalculator.py --radius 15 --axis C1:3 Examples/CONGRSrelaxed_geomopt-out.cif`
+`vanVleckCalculator --radius 15 --axis C1:3 Examples/CONGRSrelaxed_geomopt-out.cif`
 
 will output
 
