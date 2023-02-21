@@ -34,18 +34,17 @@ dSS_equiv_rtol = 1e-7
 # Confirmed not to affect calculated results
 dipole_tensor_convention = NMRTensor.ORDER_NQR
 
-#np.seterr(all='raise')
 
 # Typical command line arguments:
-# --radius 20 --axis C1,C53:2 ../TRIAMT01_geomopt-out.cif
+# --radius 20 --axis C1,C53:2 ../Examples/TRIAMT01_geomopt-out.cif
 # Pseudo C2 (short)
-# --radius 20 --CoMaxis C5:2 ../TRIAMT01_geomopt-out.cif
+# --radius 20 --CoMaxis C5:2 ../Examples/TRIAMT01_geomopt-out.cif
 # Pseudo C2 (long)
-# --radius 20 --CoMaxis C29:2 ../TRIAMT01_geomopt-out.cif
-# --radius 20 ../CONGRSrelaxed_geomopt-out.cif
+# --radius 20 --CoMaxis C29:2 ../Examples/TRIAMT01_geomopt-out.cif
+# --radius 20 ../Examples/CONGRSrelaxed_geomopt-out.cif
 # C3 axis
-# --radius 20 --axis C1:3 ../CONGRSrelaxed_geomopt-out.cif
-# --radius 1 -v TEST --axis H1,C1:3
+# --radius 20 --axis C1:3 ../Examples/CONGRSrelaxed_geomopt-out.cif
+
 
 def read_with_labels(fname):
     """ Loads a structure using ASE, ensuring that site labels are present.
