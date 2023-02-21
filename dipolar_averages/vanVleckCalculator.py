@@ -25,6 +25,9 @@ from soprano.utils import minimum_supcell, supcell_gridgen
 from ase import io
 from ase.quaternions import Quaternion
 
+# TODO Use warning module for print once warnings
+# TODO Check symmetry
+
 verbose = 0
 
 # dSS values from sites with the same CIF label are expected to be equivalent
@@ -47,7 +50,6 @@ dipole_tensor_convention = NMRTensor.ORDER_NQR
 # C3 axis
 # --radius 15 --axis C1:3 ../Examples/CONGRSrelaxed_geomopt-out.cif
 # --radius 15 --perpCoM C1:3 ../Examples/CONGRSrelaxed_geomopt-out.cif
-
 
 
 def read_with_labels(fname):
@@ -361,18 +363,19 @@ class RotationAxis(object):
                              ' in molecule'.format(self.axis_str))
             assert self.force_com == True, "BISECTOR only valid with force_com"
             if natoms == 2:
-                i1, i2 = ax_indices
+                iother = 1
             else:
-                distances = [(i, np.linalg.norm(ps[i] - ps[0])) for i in range(1, natoms+1)]
+                distances = [(i, np.linalg.norm(ps[i] - ps[0])) for i in range(1, natoms)]
                 distances.sort(key=itemgetter(1))
-                print(distances)
+
+#                print(distances)
                 if abs(distances[0][1] - distances[1][1])/distances[0][1] > 1e-3:
                     print("Warning: bisector axis definition involving multiple ({}) atoms did not yield matching internuclear distances".format(natoms), file=sys.stderr)
                 else:
                     print("Note: bisector axis definition involves multiple ({}) atoms. Assuming selections are equivalent".format(natoms))
-                i1, i2 = ax_indices[0], distances[0][0]
+                iother = distances[0][0]
 
-            v = 0.5*(ps[i1] + ps[i2]) - rmol.com
+            v = 0.5*(ps[0] + ps[iother]) - rmol.com
 
         else:
             if natoms != 2:
