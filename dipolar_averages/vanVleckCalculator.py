@@ -13,7 +13,9 @@ import warnings
 import sys
 import argparse as ap
 import numpy as np
+from enum import Enum
 
+from operator import itemgetter
 from collections import defaultdict, Counter
 from soprano.nmr.tensor import NMRTensor
 from soprano.nmr.utils import _get_isotope_data, _dip_constant
@@ -34,18 +36,19 @@ dSS_equiv_rtol = 1e-7
 # Confirmed not to affect calculated results
 dipole_tensor_convention = NMRTensor.ORDER_NQR
 
-#np.seterr(all='raise')
 
 # Typical command line arguments:
-# --radius 20 --axis C1,C53:2 ../TRIAMT01_geomopt-out.cif
+# --radius 20 --axis C1,C53:2 ../Examples/TRIAMT01_geomopt-out.cif
 # Pseudo C2 (short)
-# --radius 20 --CoMaxis C5:2 ../TRIAMT01_geomopt-out.cif
+# --radius 20 --CoMaxis C5:2 ../Examples/TRIAMT01_geomopt-out.cif
 # Pseudo C2 (long)
-# --radius 20 --CoMaxis C29:2 ../TRIAMT01_geomopt-out.cif
-# --radius 20 ../CONGRSrelaxed_geomopt-out.cif
+# --radius 20 --CoMaxis C29:2 ../Examples/TRIAMT01_geomopt-out.cif
+# --radius 20 ../Examples/CONGRSrelaxed_geomopt-out.cif
 # C3 axis
-# --radius 20 --axis C1:3 ../CONGRSrelaxed_geomopt-out.cif
-# --radius 1 -v TEST --axis H1,C1:3
+# --radius 15 --axis C1:3 ../Examples/CONGRSrelaxed_geomopt-out.cif
+# --radius 15 --perpCoM C1:3 ../Examples/CONGRSrelaxed_geomopt-out.cif
+
+
 
 def read_with_labels(fname):
     """ Loads a structure using ASE, ensuring that site labels are present.
@@ -242,6 +245,9 @@ def D2_contribution(D, axis=None):
 #       return B2/9.0
         return (d**2)*(1 + (eta**2)/3.0)
 
+
+AxisType = Enum('AxisType', ['NORMAL', 'PERPENDICULAR', 'BISECTOR'])
+
 class RotationAxis(object):
     """ Class defining an axis of rotation
 
@@ -271,7 +277,9 @@ class RotationAxis(object):
         the wrong atoms. ``None`` disables check.
    """
 
-    def __init__(self, axis_str, force_com=False, perpendicular=False, off_com_tol=0.1):
+    axre = re.compile('([A-Za-z0-9]+)(?:,([A-Za-z0-9]+))?(?::([0-9]))?')
+
+    def __init__(self, axis_str, axistype, force_com=False, off_com_tol=0.1):
         """
         Raises
         ------
@@ -280,8 +288,7 @@ class RotationAxis(object):
             the range 2 to 6
         """
 
-        axre = re.compile('([A-Za-z0-9]+)(?:,([A-Za-z0-9]+))?(?::([0-9]))?')
-        m = axre.match(axis_str)
+        m = RotationAxis.axre.match(axis_str)
 
         if not m:
             raise ValueError('Invalid axis definition {}'.format(axis_str))
@@ -301,7 +308,9 @@ class RotationAxis(object):
         self.a1 = a1
         self.a2 = a2
         self.force_com = force_com
-        self.perpendicular = perpendicular
+        if not isinstance(axistype, AxisType):
+            raise RuntimeError("axistype argument unrecognised")
+        self.axistype = axistype
         self.off_com_tol = off_com_tol
 
     def validate(self, rmol):
@@ -342,24 +351,45 @@ class RotationAxis(object):
 # Really should check that labels are positively present
         ax_indices = np.concatenate((np.where(labels == self.a1)[0],
                                      np.where(labels == self.a2)[0]))
-        if ax_indices.shape != (2,):
-            raise ValueError('Invalid axis: {} does not define two atoms'
+
+        natoms = len(ax_indices)
+        ps = rmol.positions[ax_indices]
+
+        if self.axistype == AxisType.BISECTOR:
+            if natoms < 2:
+                raise ValueError('Invalid axis: {} must define at least two atoms'
+                             ' in molecule'.format(self.axis_str))
+            assert self.force_com == True, "BISECTOR only valid with force_com"
+            if natoms == 2:
+                i1, i2 = ax_indices
+            else:
+                distances = [(i, np.linalg.norm(ps[i] - ps[0])) for i in range(1, natoms+1)]
+                distances.sort(key=itemgetter(1))
+                print(distances)
+                if abs(distances[0][1] - distances[1][1])/distances[0][1] > 1e-3:
+                    print("Warning: bisector axis definition involving multiple ({}) atoms did not yield matching internuclear distances".format(natoms), file=sys.stderr)
+                else:
+                    print("Note: bisector axis definition involves multiple ({}) atoms. Assuming selections are equivalent".format(natoms))
+                i1, i2 = ax_indices[0], distances[0][0]
+
+            v = 0.5*(ps[i1] + ps[i2]) - rmol.com
+
+        else:
+            if natoms != 2:
+                raise ValueError('Invalid axis: {} does not define two atoms'
                              ' in molecule'.format(self.axis_str))
 
-        i1, i2 = ax_indices
-        p1, p2 = rmol.positions[ax_indices]
+            i1, i2 = ax_indices
+            p1, p2 = ps
+            v = p2 - p1
 
-        v = p2 - p1
+            if self.axistype == AxisType.PERPENDICULAR:
+                notparallel = np.zeros((3))
+                maxind = np.argmax(abs(v))
+                notparallel[maxind] = v[maxind]
+                v = np.cross(v, notparallel)
+
         v /= np.linalg.norm(v)  # unit vector defining axis direction
-
-        if self.perpendicular:
-            notparallel = np.zeros((3))
-            maxind = np.argmax(abs(v))
-            notparallel[maxind] = v[maxind]
-            newv = np.cross(v, notparallel)
-            newv /= np.linalg.norm(newv)
-            v = newv
-
         if self.force_com:
             # Force this to pass through the center of mass
             p1 = rmol.com
@@ -570,6 +600,11 @@ def cli():
                         help="Specify an axis in plane of Centre of "
                         "Mass and perpendicular to interatomic vector "
                         "defined by first_atom_label[,second_atom_label][:n]")
+    parser.add_argument('--bisectorCoMaxis', action='append',
+                        dest='bisectorCoMaxes', default=[], metavar='AXIS',
+                        help="Specify an axis that bisects a pair of atoms and"
+                        " passes through the Centre of Mass as "
+                        "first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--nomerge', dest='nomerge', action="store_true",
                         help="Don't merge results from sites with same label")
     parser.add_argument('--radius', '-r', dest="radius", type=float,
@@ -611,9 +646,16 @@ def cli():
     el_gamma = _get_isotope_data([element], 'gamma')[0]
 
     # Parse axes. Note that application order shouldn't matter
-    axes = [RotationAxis(a, False) for a in args.axes]
-    axes += [RotationAxis(a, True) for a in args.CoMaxes]
-    axes += [RotationAxis(a, True, perpendicular=True) for a in args.perpCoMaxes]
+    axes = []
+
+    def addaxes(axislist, axistype, forceCoM=True):
+        for a in axislist:
+            axes.append(RotationAxis(a, axistype, forceCoM))
+
+    addaxes(args.axes, AxisType.NORMAL, False)
+    addaxes(args.CoMaxes, AxisType.NORMAL)
+    addaxes(args.perpCoMaxes, AxisType.PERPENDICULAR)
+    addaxes(args.bisectorCoMaxes, AxisType.BISECTOR)
 
     # Find molecules
     mols, mol_types = molecule_crystallographic_types(structure)
