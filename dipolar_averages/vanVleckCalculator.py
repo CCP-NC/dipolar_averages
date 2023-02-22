@@ -583,6 +583,9 @@ class RotatingMolecule(object):
 def cli():
     """ Command line interface for dipolar_couplings.py
     """
+
+    global verbose
+
     parser = ap.ArgumentParser()
     parser.add_argument('structure',
                         help="A structure file containing site labels in an "
@@ -591,19 +594,19 @@ def cli():
                         help="Element for which to compute the (homonuclear) "
                         "dipolar couplings (default H)")
     parser.add_argument('--central_label', '-c', default=None,
-                        dest='central_label', metavar = 'LABEL',
+                        dest='central_label', metavar='LABEL',
                         help="Crystallographic label of atom to use to define"
                         " a central molecule in case of more than one type")
     parser.add_argument('--axis', action='append', dest='axes',
-                        default=[], metavar = 'AXIS',
+                        default=[], metavar='AXIS',
                         help="Specify an axis through "
                         "first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--CoMaxis', action='append', dest='CoMaxes',
-                        default=[], metavar = 'AXIS',
+                        default=[], metavar='AXIS',
                         help="Specify an axis through Centre of "
                         "Mass as first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--perpCoMaxis', action='append', dest='perpCoMaxes',
-                        default=[], metavar = 'AXIS',
+                        default=[], metavar='AXIS',
                         help="Specify an axis in plane of Centre of "
                         "Mass and perpendicular to interatomic vector "
                         "defined by first_atom_label[,second_atom_label][:n]")
@@ -808,4 +811,3 @@ def cli():
 if __name__ == "__main__":
     # call  the cli
     cli()
-
