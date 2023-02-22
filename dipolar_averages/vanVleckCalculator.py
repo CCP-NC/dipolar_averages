@@ -8,12 +8,16 @@ crystals, including the effects of rotational motion.
 Made by Simone Sturniolo and Paul Hodgkinson for CCP-NC (2021-23)
 """
 
+# TODO  Add useful tolerances to command-line arguments
+
 import re
 import warnings
 import sys
 import argparse as ap
 import numpy as np
+from enum import Enum
 
+from operator import itemgetter
 from collections import defaultdict, Counter
 from soprano.nmr.tensor import NMRTensor
 from soprano.nmr.utils import _get_isotope_data, _dip_constant
@@ -26,26 +30,28 @@ from ase.quaternions import Quaternion
 verbose = 0
 
 # dSS values from sites with the same CIF label are expected to be equivalent
-# This sets the fractional tolerance, and can be quite low due to analytical
-# calculation
-dSS_equiv_rtol = 1e-7
+# under rotations corresponding to a molecular symmetry. This sets the
+# fractional tolerance, and can be quite low due to analytical calculation.
+# Note that some symmetry operations, may, however, just group atoms into
+# equivalent sets.
+dSS_equiv_rtol = 1e-5
 
 # Ordering convention for dipolar tensors.
 # Confirmed not to affect calculated results
 dipole_tensor_convention = NMRTensor.ORDER_NQR
 
-#np.seterr(all='raise')
 
 # Typical command line arguments:
-# --radius 20 --axis C1,C53:2 ../TRIAMT01_geomopt-out.cif
+# --radius 20 --axis C1,C53:2 ../Examples/TRIAMT01_geomopt-out.cif
 # Pseudo C2 (short)
-# --radius 20 --CoMaxis C5:2 ../TRIAMT01_geomopt-out.cif
+# --radius 20 --CoMaxis C5:2 ../Examples/TRIAMT01_geomopt-out.cif
 # Pseudo C2 (long)
-# --radius 20 --CoMaxis C29:2 ../TRIAMT01_geomopt-out.cif
-# --radius 20 ../CONGRSrelaxed_geomopt-out.cif
+# --radius 20 --CoMaxis C29:2 ../Examples/TRIAMT01_geomopt-out.cif
+# --radius 20 ../Examples/CONGRSrelaxed_geomopt-out.cif
 # C3 axis
-# --radius 20 --axis C1:3 ../CONGRSrelaxed_geomopt-out.cif
-# --radius 1 -v TEST --axis H1,C1:3
+# --radius 15 --axis C1:3 ../Examples/CONGRSrelaxed_geomopt-out.cif
+# --radius 15 --perpCoM C1:3 ../Examples/CONGRSrelaxed_geomopt-out.cif
+
 
 def read_with_labels(fname):
     """ Loads a structure using ASE, ensuring that site labels are present.
@@ -242,6 +248,9 @@ def D2_contribution(D, axis=None):
 #       return B2/9.0
         return (d**2)*(1 + (eta**2)/3.0)
 
+
+AxisType = Enum('AxisType', ['NORMAL', 'PERPENDICULAR', 'BISECTOR'])
+
 class RotationAxis(object):
     """ Class defining an axis of rotation
 
@@ -271,7 +280,9 @@ class RotationAxis(object):
         the wrong atoms. ``None`` disables check.
    """
 
-    def __init__(self, axis_str, force_com=False, perpendicular=False, off_com_tol=0.1):
+    axre = re.compile('([A-Za-z0-9]+)(?:,([A-Za-z0-9]+))?(?::([0-9]))?')
+
+    def __init__(self, axis_str, axistype, force_com=False, off_com_tol=0.1):
         """
         Raises
         ------
@@ -280,8 +291,7 @@ class RotationAxis(object):
             the range 2 to 6
         """
 
-        axre = re.compile('([A-Za-z0-9]+)(?:,([A-Za-z0-9]+))?(?::([0-9]))?')
-        m = axre.match(axis_str)
+        m = RotationAxis.axre.match(axis_str)
 
         if not m:
             raise ValueError('Invalid axis definition {}'.format(axis_str))
@@ -301,8 +311,11 @@ class RotationAxis(object):
         self.a1 = a1
         self.a2 = a2
         self.force_com = force_com
-        self.perpendicular = perpendicular
+        if not isinstance(axistype, AxisType):
+            raise RuntimeError("axistype argument unrecognised")
+        self.axistype = axistype
         self.off_com_tol = off_com_tol
+        self.bisector_warning_done = False
 
     def validate(self, rmol):
         """ Check if this axis is valid for the given molecule
@@ -342,24 +355,48 @@ class RotationAxis(object):
 # Really should check that labels are positively present
         ax_indices = np.concatenate((np.where(labels == self.a1)[0],
                                      np.where(labels == self.a2)[0]))
-        if ax_indices.shape != (2,):
-            raise ValueError('Invalid axis: {} does not define two atoms'
+
+        natoms = len(ax_indices)
+        ps = rmol.positions[ax_indices]
+
+        if self.axistype == AxisType.BISECTOR:
+            if natoms < 2:
+                raise ValueError('Invalid axis: {} must define at least two atoms'
+                             ' in molecule'.format(self.axis_str))
+            assert self.force_com == True, "BISECTOR only valid with force_com"
+            if natoms == 2:
+                iother = 1
+            else:
+                distances = [(i, np.linalg.norm(ps[i] - ps[0])) for i in range(1, natoms)]
+                distances.sort(key=itemgetter(1))
+
+                if not self.bisector_warning_done:
+#                    meanpos = np.mean(ps, axis=0)
+                    if abs(distances[0][1] - distances[1][1])/distances[0][1] > 1e-3:
+                        print("Warning: Bisector axis definition involving multiple ({}) atoms did not yield matching internuclear distances".format(natoms), file=sys.stderr)
+                    else:
+                        print("Note: bisector axis definition involves multiple ({}) atoms. Assuming selections are equivalent".format(natoms))
+                    self.bisector_warning_done = True
+
+                iother = distances[0][0]
+
+            v = 0.5*(ps[0] + ps[iother]) - rmol.com
+        else:
+            if natoms != 2:
+                raise ValueError('Invalid axis: {} does not define two atoms'
                              ' in molecule'.format(self.axis_str))
 
-        i1, i2 = ax_indices
-        p1, p2 = rmol.positions[ax_indices]
+            i1, i2 = ax_indices
+            p1, p2 = ps
+            v = p2 - p1
 
-        v = p2 - p1
+            if self.axistype == AxisType.PERPENDICULAR:
+                notparallel = np.zeros((3))
+                maxind = np.argmax(abs(v))
+                notparallel[maxind] = v[maxind]
+                v = np.cross(v, notparallel)
+
         v /= np.linalg.norm(v)  # unit vector defining axis direction
-
-        if self.perpendicular:
-            notparallel = np.zeros((3))
-            maxind = np.argmax(abs(v))
-            notparallel[maxind] = v[maxind]
-            newv = np.cross(v, notparallel)
-            newv /= np.linalg.norm(newv)
-            v = newv
-
         if self.force_com:
             # Force this to pass through the center of mass
             p1 = rmol.com
@@ -422,8 +459,8 @@ class RotatingMolecule(object):
     be passed for Z' = 1, since all the axes should pass through the CoM
     unless the tolerance is large (no allowance is made for a large
     off_com_tol). The second is expected to fail, e.g. for 2 C3 rotations.
-    But it's not clear why this should generate an exception rather than a
-    warning.
+    But it's not clear why this is a problem (code commented out).
+
 
     All atomic positions in molecule are evaluated, even though only a subset
     corresponding to selected isotope are needed. Similarly symbols, labels
@@ -433,7 +470,7 @@ class RotatingMolecule(object):
     """
 
     def __init__(self, s, mol, axes, ijk=[0, 0, 0], element=None,
-                 ignoreinvalid=False, checkcommuting=True):
+                 ignoreinvalid=False, checkaxes=True):
         """
         Parameters
         ----------
@@ -449,8 +486,8 @@ class RotatingMolecule(object):
             Select atom type (optional). `None` corresponds to all atoms
         ignoreinvalid : bool
             Ignore axes that are invalid for this molecule (default `False`)
-        checkcommuting : bool
-            Apply commutation test to axes (see Notes). Default is `True`
+        checkaxes : bool
+            Apply commutation tests to axes (see Notes). Default is `True`
         """
 
         self.cell = s.get_cell()
@@ -476,7 +513,7 @@ class RotatingMolecule(object):
                     raise
 
         # Do they all commute (see Notes)?
-        if checkcommuting:
+        if checkaxes:
             for i, (R1, o1, n1) in enumerate(self.rotations):
                 for j, (R2, o2, n2) in enumerate(self.rotations[i+1:]):
                     # Check that o2 is invariant under R1
@@ -485,11 +522,11 @@ class RotatingMolecule(object):
                         raise ValueError('Molecule has rotations with'
                                          ' non-intersecting axes')
                     # Check that R1 and R2 commute
-                    comm = R1 @ R2 - R2 @ R1
-                    if not np.isclose(np.linalg.norm(comm), 0.0):
-                        print('Warning: molecule has non-commuting rotations', file=sys.stderr)
+#                    comm = R1 @ R2 - R2 @ R1
+#                   if not np.isclose(np.linalg.norm(comm), 0.0):
+#                        print('Warning: molecule has non-commuting rotations', file=sys.stderr)
             if verbose:
-                print("Axis commutation check passed")
+                print("Axis checks passed")
 
         if len(self.rotations) == 0:
             # Just regular positions...
@@ -546,6 +583,9 @@ class RotatingMolecule(object):
 def cli():
     """ Command line interface for dipolar_couplings.py
     """
+
+    global verbose
+
     parser = ap.ArgumentParser()
     parser.add_argument('structure',
                         help="A structure file containing site labels in an "
@@ -554,22 +594,27 @@ def cli():
                         help="Element for which to compute the (homonuclear) "
                         "dipolar couplings (default H)")
     parser.add_argument('--central_label', '-c', default=None,
-                        dest='central_label', metavar = 'LABEL',
+                        dest='central_label', metavar='LABEL',
                         help="Crystallographic label of atom to use to define"
                         " a central molecule in case of more than one type")
     parser.add_argument('--axis', action='append', dest='axes',
-                        default=[], metavar = 'AXIS',
+                        default=[], metavar='AXIS',
                         help="Specify an axis through "
                         "first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--CoMaxis', action='append', dest='CoMaxes',
-                        default=[], metavar = 'AXIS',
+                        default=[], metavar='AXIS',
                         help="Specify an axis through Centre of "
                         "Mass as first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--perpCoMaxis', action='append', dest='perpCoMaxes',
-                        default=[], metavar = 'AXIS',
+                        default=[], metavar='AXIS',
                         help="Specify an axis in plane of Centre of "
                         "Mass and perpendicular to interatomic vector "
                         "defined by first_atom_label[,second_atom_label][:n]")
+    parser.add_argument('--bisectorCoMaxis', action='append',
+                        dest='bisectorCoMaxes', default=[], metavar='AXIS',
+                        help="Specify an axis that bisects a pair of atoms and"
+                        " passes through the Centre of Mass as "
+                        "first_atom_label[,second_atom_label][:n]")
     parser.add_argument('--nomerge', dest='nomerge', action="store_true",
                         help="Don't merge results from sites with same label")
     parser.add_argument('--radius', '-r', dest="radius", type=float,
@@ -611,9 +656,16 @@ def cli():
     el_gamma = _get_isotope_data([element], 'gamma')[0]
 
     # Parse axes. Note that application order shouldn't matter
-    axes = [RotationAxis(a, False) for a in args.axes]
-    axes += [RotationAxis(a, True) for a in args.CoMaxes]
-    axes += [RotationAxis(a, True, perpendicular=True) for a in args.perpCoMaxes]
+    axes = []
+
+    def addaxes(axislist, axistype, forceCoM=True):
+        for a in axislist:
+            axes.append(RotationAxis(a, axistype, forceCoM))
+
+    addaxes(args.axes, AxisType.NORMAL, False)
+    addaxes(args.CoMaxes, AxisType.NORMAL)
+    addaxes(args.perpCoMaxes, AxisType.PERPENDICULAR)
+    addaxes(args.bisectorCoMaxes, AxisType.BISECTOR)
 
     # Find molecules
     mols, mol_types = molecule_crystallographic_types(structure)
@@ -715,10 +767,9 @@ def cli():
     print("Label\tIntra-drss/kHz\tInter-drss/kHz")
 
     if args.nomerge:
-        for i in range(natoms):
-            lab = rmol0_rotpos[i][0]
-            intram = intra_moments[i]
-            interm = inter_moments[i]
+        dataout = [(rmol0_rotpos[i][0], intra_moments[i], inter_moments[i]) for i in range(natoms)]
+        dataout.sort()
+        for lab, intram, interm in dataout:
             print("{}\t{:.2f}\t{:.2f}".format(lab, intram**0.5, interm**0.5))
     else:
         def checkequiv(vals):
@@ -730,9 +781,10 @@ def cli():
                 return mean
             frac = (max(vals)-min(vals))/mean
             if frac > dSS_equiv_rtol:
-                raise RuntimeError("Values from equivalent sites differ by "
+                raise RuntimeError("Values from sites with same label differ by "
                                    "more than a fractional tolerance of {}. "
-                                   "Use --nomerge to investigate or increase "
+                                   "Use --nomerge to investigate whether this "
+                                   "symmetry breaking is plausible or increase "
                                    "tolerance", dSS_equiv_rtol)
             return mean
 
@@ -759,4 +811,3 @@ def cli():
 if __name__ == "__main__":
     # call  the cli
     cli()
-
