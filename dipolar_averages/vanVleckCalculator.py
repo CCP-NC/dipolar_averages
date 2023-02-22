@@ -8,6 +8,8 @@ crystals, including the effects of rotational motion.
 Made by Simone Sturniolo and Paul Hodgkinson for CCP-NC (2021-23)
 """
 
+# TODO  Add useful tolerances to command-line arguments
+
 import re
 import warnings
 import sys
@@ -25,15 +27,14 @@ from soprano.utils import minimum_supcell, supcell_gridgen
 from ase import io
 from ase.quaternions import Quaternion
 
-# TODO Use warning module for print once warnings
-# TODO Check symmetry
-
 verbose = 0
 
 # dSS values from sites with the same CIF label are expected to be equivalent
-# This sets the fractional tolerance, and can be quite low due to analytical
-# calculation
-dSS_equiv_rtol = 1e-7
+# under rotations corresponding to a molecular symmetry. This sets the
+# fractional tolerance, and can be quite low due to analytical calculation.
+# Note that some symmetry operations, may, however, just group atoms into
+# equivalent sets.
+dSS_equiv_rtol = 1e-5
 
 # Ordering convention for dipolar tensors.
 # Confirmed not to affect calculated results
@@ -314,6 +315,7 @@ class RotationAxis(object):
             raise RuntimeError("axistype argument unrecognised")
         self.axistype = axistype
         self.off_com_tol = off_com_tol
+        self.bisector_warning_done = False
 
     def validate(self, rmol):
         """ Check if this axis is valid for the given molecule
@@ -368,15 +370,17 @@ class RotationAxis(object):
                 distances = [(i, np.linalg.norm(ps[i] - ps[0])) for i in range(1, natoms)]
                 distances.sort(key=itemgetter(1))
 
-#                print(distances)
-                if abs(distances[0][1] - distances[1][1])/distances[0][1] > 1e-3:
-                    print("Warning: bisector axis definition involving multiple ({}) atoms did not yield matching internuclear distances".format(natoms), file=sys.stderr)
-                else:
-                    print("Note: bisector axis definition involves multiple ({}) atoms. Assuming selections are equivalent".format(natoms))
+                if not self.bisector_warning_done:
+#                    meanpos = np.mean(ps, axis=0)
+                    if abs(distances[0][1] - distances[1][1])/distances[0][1] > 1e-3:
+                        print("Warning: Bisector axis definition involving multiple ({}) atoms did not yield matching internuclear distances".format(natoms), file=sys.stderr)
+                    else:
+                        print("Note: bisector axis definition involves multiple ({}) atoms. Assuming selections are equivalent".format(natoms))
+                    self.bisector_warning_done = True
+
                 iother = distances[0][0]
 
             v = 0.5*(ps[0] + ps[iother]) - rmol.com
-
         else:
             if natoms != 2:
                 raise ValueError('Invalid axis: {} does not define two atoms'
@@ -455,8 +459,8 @@ class RotatingMolecule(object):
     be passed for Z' = 1, since all the axes should pass through the CoM
     unless the tolerance is large (no allowance is made for a large
     off_com_tol). The second is expected to fail, e.g. for 2 C3 rotations.
-    But it's not clear why this should generate an exception rather than a
-    warning.
+    But it's not clear why this is a problem (code commented out).
+
 
     All atomic positions in molecule are evaluated, even though only a subset
     corresponding to selected isotope are needed. Similarly symbols, labels
@@ -466,7 +470,7 @@ class RotatingMolecule(object):
     """
 
     def __init__(self, s, mol, axes, ijk=[0, 0, 0], element=None,
-                 ignoreinvalid=False, checkcommuting=True):
+                 ignoreinvalid=False, checkaxes=True):
         """
         Parameters
         ----------
@@ -482,8 +486,8 @@ class RotatingMolecule(object):
             Select atom type (optional). `None` corresponds to all atoms
         ignoreinvalid : bool
             Ignore axes that are invalid for this molecule (default `False`)
-        checkcommuting : bool
-            Apply commutation test to axes (see Notes). Default is `True`
+        checkaxes : bool
+            Apply commutation tests to axes (see Notes). Default is `True`
         """
 
         self.cell = s.get_cell()
@@ -509,7 +513,7 @@ class RotatingMolecule(object):
                     raise
 
         # Do they all commute (see Notes)?
-        if checkcommuting:
+        if checkaxes:
             for i, (R1, o1, n1) in enumerate(self.rotations):
                 for j, (R2, o2, n2) in enumerate(self.rotations[i+1:]):
                     # Check that o2 is invariant under R1
@@ -518,11 +522,11 @@ class RotatingMolecule(object):
                         raise ValueError('Molecule has rotations with'
                                          ' non-intersecting axes')
                     # Check that R1 and R2 commute
-                    comm = R1 @ R2 - R2 @ R1
-                    if not np.isclose(np.linalg.norm(comm), 0.0):
-                        print('Warning: molecule has non-commuting rotations', file=sys.stderr)
+#                    comm = R1 @ R2 - R2 @ R1
+#                   if not np.isclose(np.linalg.norm(comm), 0.0):
+#                        print('Warning: molecule has non-commuting rotations', file=sys.stderr)
             if verbose:
-                print("Axis commutation check passed")
+                print("Axis checks passed")
 
         if len(self.rotations) == 0:
             # Just regular positions...
@@ -760,10 +764,9 @@ def cli():
     print("Label\tIntra-drss/kHz\tInter-drss/kHz")
 
     if args.nomerge:
-        for i in range(natoms):
-            lab = rmol0_rotpos[i][0]
-            intram = intra_moments[i]
-            interm = inter_moments[i]
+        dataout = [(rmol0_rotpos[i][0], intra_moments[i], inter_moments[i]) for i in range(natoms)]
+        dataout.sort()
+        for lab, intram, interm in dataout:
             print("{}\t{:.2f}\t{:.2f}".format(lab, intram**0.5, interm**0.5))
     else:
         def checkequiv(vals):
@@ -775,9 +778,10 @@ def cli():
                 return mean
             frac = (max(vals)-min(vals))/mean
             if frac > dSS_equiv_rtol:
-                raise RuntimeError("Values from equivalent sites differ by "
+                raise RuntimeError("Values from sites with same label differ by "
                                    "more than a fractional tolerance of {}. "
-                                   "Use --nomerge to investigate or increase "
+                                   "Use --nomerge to investigate whether this "
+                                   "symmetry breaking is plausible or increase "
                                    "tolerance", dSS_equiv_rtol)
             return mean
 
