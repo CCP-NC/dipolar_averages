@@ -785,7 +785,7 @@ def cli():
                                    "more than a fractional tolerance of {}. "
                                    "Use --nomerge to investigate whether this "
                                    "symmetry breaking is plausible or increase "
-                                   "tolerance", dSS_equiv_rtol)
+                                   "tolerance".format(dSS_equiv_rtol))
             return mean
 
         for lab, intram in intra_moments_dict.items():
