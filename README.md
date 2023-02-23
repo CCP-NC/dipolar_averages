@@ -76,7 +76,7 @@ motions are always fast, the order in which multiple axes are given is not impor
 `vanVleckCalculator --help` will give the command line arguments and usage. A few clarifying points:
 - Since H positioning is critical for quantitative results, either use neutron-diffraction structures,
 - or DFT-optimised structures, with H positions relaxed.
-- The symmetry of a rotation must be specified explictly, e.g. --axis C1,C2:2 denotes a two-fold jump motion
+- The symmetry of a rotation must be specified explictly, e.g. `--axis C1,C2:2` denotes a two-fold jump motion
 about a vector between C1 and C2. No check is made against the symmetry of the molecule, so specifying a two-fold
 jump along an axis with 3-fold symmetry will **not** generate a warning!
 - If an axis involves atoms with the same label, it is sufficient to give the label once, e.g. --CoMaxis C3:3
