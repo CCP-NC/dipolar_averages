@@ -58,11 +58,12 @@ molecules. In principle, the code supports systems in which there is more than o
 cell (Z' > 1), but this code has not been tested and issues can be expected.
 
 Motions are currently limited to rotational diffusion about specified axes. Axis specifications are in
-terms of site labels within an individual molecule, with three specifications supported:
+terms of site labels within an individual molecule, with four specifications supported:
 - Axes passing through a pair of atoms e.g. --axis C1,C2. Such axes must pass
 through the centre of mass (CoM) within a tolerance, currently 0.1 Å,
 - Axes passing through the CoM, parallel to the interatomic vector between two atoms,
-- Axes in a plane through the CoM and normal to a given interatomic vector (arbitrary orientation within plane).
+- Axes in a plane through the CoM and normal to a given interatomic vector (arbitrary orientation within plane),
+- Axes bisecting a pair of atoms through the CoM.
 
 Note that these axis specifications all resolve internally to specify a rotation in terms of a vector providing an origin and direction, i.e.
 it would be straightforward to extend the code to specify axes in different ways.
@@ -75,12 +76,19 @@ motions are always fast, the order in which multiple axes are given is not impor
 `vanVleckCalculator --help` will give the command line arguments and usage. A few clarifying points:
 - Since H positioning is critical for quantitative results, either use neutron-diffraction structures,
 - or DFT-optimised structures, with H positions relaxed.
-- The symmetry of a rotation must be specified explictly, e.g. --axis C1,C2:2 denotes a two-fold jump motion
+- The symmetry of a rotation must be specified explictly, e.g. `--axis C1,C2:2` denotes a two-fold jump motion
 about a vector between C1 and C2. No check is made against the symmetry of the molecule, so specifying a two-fold
 jump along an axis with 3-fold symmetry will **not** generate a warning!
 - If an axis involves atoms with the same label, it is sufficient to give the label once, e.g. --CoMaxis C3:3
 denotes a 3-fold rotation about an axis passing through both C3 atoms in a molecule. For this to work, the molecule
 must have exactly two atoms of type C3.
+- The `perpCoMaxis` specification should only be used for truely "pseudo" axes, since the orientation of the axis
+is undefined in terms of individual atoms. Prefer the `bisectorCoMaxis` option if possible, for example, for C2 axes that 
+are perpendicular to the principal symmetry axis.
+- Uniquely the `bisectorCoMaxis` specification permits atom specifications that return more than two atoms. In this case,
+a pair of atoms that are closest together are identified and the bisector found by averaging these atomic positions. A warning
+is given if two equivalent short distances are not found; it is assumed that the set of atoms are related by symmetry, e.g.
+a C3 axis, and so a given atom should be equidistant to two others in the "ring".
 - The calculation time will increase rapidly (roughly as the cube) with the radius parameter.
 Depending on the degree of convergence sought,
 there is little value in exceeding a radius of 20 Å. Note that a radius of 0
