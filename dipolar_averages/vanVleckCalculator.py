@@ -764,13 +764,15 @@ def cli():
         intra_moments_dict[lab].append(intra_moments[i])
         inter_moments_dict[lab].append(inter_moments[i])
 
-    print("Label\tIntra-drss/kHz\tInter-drss/kHz")
+    M2scaling_factor = (3.0/5)*el_I*(el_I+1)
+
+    print("Label\tIntra-drss/kHz\tInter-drss/kHz\tTotal drss/kHz")
 
     if args.nomerge:
         dataout = [(rmol0_rotpos[i][0], intra_moments[i], inter_moments[i]) for i in range(natoms)]
         dataout.sort()
         for lab, intram, interm in dataout:
-            print("{}\t{:.2f}\t{:.2f}".format(lab, intram**0.5, interm**0.5))
+            print("{}\t{:.2f} \t{:.2f} \t{:.2f}".format(lab, intram**0.5, interm**0.5, (intram+interm)**0.5))
     else:
         def checkequiv(vals):
             """ Check values that are expected to be same within rounding error
@@ -792,7 +794,7 @@ def cli():
             intram = checkequiv(intram)
             interm = checkequiv(inter_moments_dict[lab])
 
-            print("{}\t{:.2f} \t{:.2f}".format(lab, intram**0.5, interm**0.5))
+            print("{}\t{:.2f} \t{:.2f} \t{:.2f}".format(lab, intram**0.5, interm**0.5, (intram+interm)**0.5))
 
     mean_dSS_intra = np.mean(intra_moments)
     mean_dSS_inter = np.mean(inter_moments)
@@ -802,8 +804,7 @@ def cli():
         mean_dSS_intra))
     print("Intermolecular contribution to mean d_SS at "
           "{:g} Å: {:.2f} kHz^2".format(R, mean_dSS_inter))
-    print("Overall mean d_SS: {:.2f} kHz^2    Mean d_RSS {:.2f} kHz".format(total_dSS, total_dSS**0.5))
-    M2scaling_factor = (3.0/5)*el_I*(el_I+1)
+    print("Mean d_SS: {:.2f} kHz^2    Mean d_RSS {:.2f} kHz".format(total_dSS, total_dSS**0.5))
     print("Second moment: {:.2f} (Intra: {:.2f}  Inter: {:.2f}) kHz^2".format(total_dSS*M2scaling_factor,
                         mean_dSS_intra*M2scaling_factor, mean_dSS_inter*M2scaling_factor))
 

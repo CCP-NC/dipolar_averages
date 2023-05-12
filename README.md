@@ -98,16 +98,20 @@ will output
 >Structure analysed: Z = 4, Z' = 1<br>
 >Number of molecules for intermolecular interactions: 54<br>
 >Label	Intra-drss/kHz	Inter-drss/kHz<br>
->H1	3.32 	12.06<br>
->H9	13.56 	8.25<br>
->H33	13.58 	8.41<br>
->H57	11.17 	8.47<br>
+>H1	  3.32 	12.06   12.51<br>
+>H9	 13.56 	 8.25   15.87<br>
+>H33 13.58 	 8.41   15.97<br>
+>H57 11.17 	 8.47   14.02<br>
 >Intramolecular contribution to mean d_SS: 148.98 kHz^2<br>
 >Intermolecular contribution to mean d_SS at 15 Å: 77.68 kHz^2<br>
 >Overall mean d_SS: 226.67 kHz^2    Mean d_RSS 15.06 kHz<br>
 >Second moment: 102.00 (Intra: 67.04  Inter: 34.96) kHz^2<br>
 
 In other words, the structure contains four molecules of diamantane in the unit cell, one unique molecule. 54 molecules are within 15 Å of the reference molecule. The following table gives the intramolecular and intermolecular contributions to the root-sum-square dipolar coupling at the 4 crystallographically distinct H sites. The final lines give the mean sum-square and root-sum-square couplings, followed by the corresponding second moments (proportional to the mean sum-square-coupling).
+
+## Test script
+
+**test/AverageUnitTest.py** is a test script to validate the key result that the averaging of motionally averaged dipolar tensors can be carried out analytically.
 
 ## Contributing
 

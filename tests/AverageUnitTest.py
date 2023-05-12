@@ -10,6 +10,7 @@ from soprano.data.nmr import nmr_gamma
 from soprano.nmr.utils import _dip_constant
 from soprano.calculate.powder import ZCW
 from ase.quaternions import Quaternion
+import matplotlib.pyplot as plt
 
 # Ordering convention for dipolar tensors.
 # Confirmed not to affect calculated results
@@ -17,7 +18,7 @@ dipole_tensor_convention = NMRTensor.ORDER_NQR  # HAEBERLEN
 
 halfangle = 45  # degrees
 
-ZCWorients = 100
+ZCWorients_list = [21, 34, 55, 89, 144]
 
 r = 1.75  # internuclear distance. Typical for CH2
 gamma1H = nmr_gamma('H', iso=1)[0]  # nmr_gamma() returns a list
@@ -60,9 +61,6 @@ contrib_RMSD_powder = abs(dav)*sqrt(0.2 + (etaav ** 2)/15.0)
 
 print("Analytical RMS D (powder) contribution: %g kHz" % contrib_RMSD_powder)
 
-angles, weights = ZCW('sphere').get_orient_angles(ZCWorients)
-print("Powder averaging over {} ZCW orientations".format(len(weights)))
-
 
 def dcontrib_single(angles):
     """ Return d_zz for average dipolar tensor evaluated at given orientation """
@@ -70,9 +68,28 @@ def dcontrib_single(angles):
     avD = average_dipolar_tensor(halfangle, zorientation=angles)
     return 0.5*avD[2, 2]
 
-dcontribs = [dcontrib_single(o) for o in angles]
-d2contribs = [dip*dip for dip in dcontribs]
-avd = np.average(dcontribs, weights=weights)  # NB weights should be uniform for ZCW
-avd2 = np.average(d2contribs, weights=weights)
-print("Average D (should be close to zero): %g kHz" % avd)
-print("Numerically averaged RMS D: %g kHz" % sqrt(avd2))
+
+avdlist = []
+for ZCWorients in ZCWorients_list:
+    angles, weights = ZCW('sphere').get_orient_angles(ZCWorients)
+    print("Powder averaging over {} ZCW orientations".format(len(weights)))
+
+    dcontribs = [dcontrib_single(o) for o in angles]
+    d2contribs = [dip*dip for dip in dcontribs]
+    avd = np.average(dcontribs, weights=weights)  # NB weights should be uniform for ZCW
+    avd2 = np.average(d2contribs, weights=weights)
+    if len(ZCWorients_list) == 1:
+        print("Average D (should be close to zero): %g kHz" % avd)
+        print("Numerically averaged RMS D: %g kHz" % sqrt(avd2))
+    else:
+        avdlist.append(sqrt(avd2))
+
+if len(ZCWorients_list) > 1:
+    ax = plt.gca()
+    artist, = ax.plot(ZCWorients_list, avdlist,'bx')
+    artist.set_label('Explicit powder average')
+    plt.xlabel('Number of powder orientations (ZCW sampling)')
+    plt.ylabel('RMSD / kHz')
+    artist, = ax.plot([21, 144],[contrib_RMSD_powder]*2,'k--')
+    artist.set_label('Analytical prediction')
+    ax.legend(frameon=False)
