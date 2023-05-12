@@ -105,7 +105,7 @@ will output
 
 >Structure analysed: Z = 4, Z' = 1<br>
 >Number of molecules for intermolecular interactions: 54<br>
->Label	Intra-drss/kHz	Inter-drss/kHz<br>
+>Label	Intra-drss/kHz	Inter-drss/kHz  Total drss/kHz<br>
 >H1	  3.32 	12.06   12.51<br>
 >H9	 13.56 	 8.25   15.87<br>
 >H33 13.58 	 8.41   15.97<br>
