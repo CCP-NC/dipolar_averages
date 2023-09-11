@@ -442,8 +442,8 @@ class RotationAxis(object):
             r = rmol.com - p1
             d = np.linalg.norm(r-(r@v)*v)
             if d > self.off_com_tol:
-                raise ValueError('Axis does not pass through centre-of-mass '
-                    '(within tolerance of {} A)'.format(self.off_com_tol))
+                raise ValueError('Distance between axis and centre-of-mass ({:.2f}'
+                    ' A) exceeds tolerance ({} A)'.format(d, self.off_com_tol))
 
         # Quaternion
         if self.n > 0:
@@ -506,7 +506,7 @@ class RotatingMolecule(object):
     """
 
     def __init__(self, s, mol, axes, ijk=[0, 0, 0], element=None,
-                 ignoreinvalid=False, checkaxes=True):
+                 checkaxes=True):
         """
         Parameters
         ----------
@@ -520,8 +520,6 @@ class RotatingMolecule(object):
             Cell offset in fractional co-ordinates. Default is no offset
         element : character
             Select atom type (optional). `None` corresponds to all atoms
-        ignoreinvalid : bool
-            Ignore axes that are invalid for this molecule (default `False`)
         checkaxes : bool
             Apply commutation tests to axes (see Notes). Default is `True`
         """
@@ -540,16 +538,10 @@ class RotatingMolecule(object):
         # Now analyze how each axis affects the molecule
         self.rotations = []
         for ax in axes:
-            try:
-                self.rotations.append(ax.validate(self))
-            except ValueError as e:
-                if ignoreinvalid:
-                    print('Skipping axis {0}: {1}'.format(ax, e))
-                else:
-                    raise
+            self.rotations.append(ax.validate(self))
 
         # Do they all commute (see Notes)?
-        if checkaxes:
+        if checkaxes and (len(self.rotations) > 1):
             for i, (R1, o1, n1) in enumerate(self.rotations):
                 for j, (R2, o2, n2) in enumerate(self.rotations[i+1:]):
                     # Check that o2 is invariant under R1
@@ -584,6 +576,9 @@ class RotatingMolecule(object):
             indices = np.where(self.symbols == element)[0]
         else:
             indices = np.arange(len(self.s))
+
+        if len(indices) == 0:
+            raise KeyError("No valid indices found!")
         self.selected_rotpos = [(self.labels[i], self.rot_positions[i]) for i in indices]
 
 
@@ -715,24 +710,32 @@ def cli():
     R = args.radius
 
     # Which is the central molecule?
-    # This is rather confusing. If Zp > 1, then it would make sense to
-    # determine which axis definitions work for which molecules.
-    # The code probably does not work for axes operating on different molecules
-    # The 'central label' seems unnecessary
-    if (Zp == 1) or not axes:
+    if Zp == 1:
         mol0_i = 0
     else:
         mol0_i = None
         atomsmols = [mol.subset(structure) for mol in mols]
-        for axis in axes:
+        if not axes:
+# Find first molecule containing element
             for i, mol in enumerate(atomsmols):
-                if axis.check_structure(mol):
-                    if mol0_i is None:
-                        mol0_i = i
-                    elif mol0_i != i:
-                        sys.exit("Different axes are active in different molecules - not implemented")
-# Note we can break here since axis labels are unique
+                if element in mol.get_chemical_symbols():
+                    mol0_i = i
                     break
+            if mol0_i is None:
+                sys.exit("No molecule contains element {}".format(element))
+            pass
+        else:
+            for axis in axes:
+                for i, mol in enumerate(atomsmols):
+                    if axis.check_structure(mol):
+                        if mol0_i is None:
+                            mol0_i = i
+                        elif mol0_i != i:
+                            sys.exit("Different axes are active in different molecules - not implemented")
+    # Note we can break here since axis labels are unique
+                        break
+            if mol0_i is None:
+                sys.exit("Failed to find a molecule satisying axis definition(s)")
         if verbose:
             print("Found key molecule: {}".format(mol0_i))
 
@@ -756,17 +759,17 @@ def cli():
     # Should be obvious if this goes wrong
     sphere_i = np.where((mol_dists <= R)*(mol_dists > 0))
 
-    # For Z' > 1, skip over axes that are not valid for molecule
-    # Apparently no check that axes are valid for at least one molecule in
-    # asymmetric unit, i.e. code is flawed / surprising for Z' > 1
-    ignoreinvalid = (Zp > 1)
-
     # Always start with the centre
-    rmols = [RotatingMolecule(structure, mols[mol0_i], axes, element=element, ignoreinvalid=ignoreinvalid)]
+    rmols = [RotatingMolecule(structure, mols[mol0_i], axes, element=element)]
     # Now create RotatingMolecule objects for the `other' molecules
     for mol_i, cell_i in zip(*sphere_i):
-        rmols.append(RotatingMolecule(structure, mols[mol_i], axes, fxyz[cell_i],
-                        element=element, ignoreinvalid=ignoreinvalid))
+        try:
+            rmols.append(RotatingMolecule(structure, mols[mol_i], axes, fxyz[cell_i],
+                            element=element))
+        except KeyError:
+# ignore molecules not containing element
+            pass
+
 
     print("Number of molecules for intermolecular interactions: "
           "{}".format(len(rmols)-1))
