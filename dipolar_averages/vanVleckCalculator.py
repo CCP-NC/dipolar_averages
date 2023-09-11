@@ -82,7 +82,10 @@ def read_with_labels(fname):
     # them
     with warnings.catch_warnings():
         warnings.simplefilter('ignore')
-        struct = io.read(fname, store_tags=True)
+        try:
+            struct = io.read(fname, store_tags=True)
+        except FileNotFoundError:
+            sys.exit("vanVleckCalculator: failed to find {}".format(fname))
     try:
         kinds = struct.get_array('spacegroup_kinds')
         struct.new_array('site_labels',
