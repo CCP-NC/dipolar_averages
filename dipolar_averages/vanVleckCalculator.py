@@ -320,6 +320,39 @@ class RotationAxis(object):
         self.off_com_tol = off_com_tol
         self.bisector_warning_done = False
 
+
+    def check_structure(self, struct):
+        """ Check if atoms are comatible with labels in structure
+
+        Parameters
+        ----------
+        struct: Atoms
+            ASE Atoms object containing site labels
+
+        Returns
+        -------
+        bool:
+            `True` if all labels are in structure
+            `False` if no labels are in structure
+
+        Raises
+        ------
+        KeyError
+            If one atom is in structure and one is not (unrecoverable)
+
+        Note
+        ----
+        Does not fully validate axis, e.g. will not highlight if >2 atoms present
+        """
+
+        labels = struct.get_array('site_labels')
+        has_a1 = (len(np.where(labels == self.a1)[0]) > 0)
+        if self.a2:
+            has_a2 = (len(np.where(labels == self.a2)[0]) > 0)
+            if has_a1 ^ has_a2:
+                raise KeyError("check_structure: axis definition partially valid")
+        return has_a1
+
     def validate(self, rmol):
         """ Check if this axis is valid for the given molecule
 
@@ -686,18 +719,22 @@ def cli():
     # determine which axis definitions work for which molecules.
     # The code probably does not work for axes operating on different molecules
     # The 'central label' seems unnecessary
-    if Zp == 1:
+    if (Zp == 1) or not axes:
         mol0_i = 0
     else:
         mol0_i = None
-        cl = args.central_label
-        for i, m in enumerate(mols):
-            if cl in m.get_array('site_labels'):
-                mol0_i = i
-                break
-        if mol0_i is None:
-            raise RuntimeError("Must specify a central label for systems with "
-                               "Z' > 1")
+        atomsmols = [mol.subset(structure) for mol in mols]
+        for axis in axes:
+            for i, mol in enumerate(atomsmols):
+                if axis.check_structure(mol):
+                    if mol0_i is None:
+                        mol0_i = i
+                    elif mol0_i != i:
+                        sys.exit("Different axes are active in different molecules - not implemented")
+# Note we can break here since axis labels are unique
+                    break
+        if verbose:
+            print("Found key molecule: {}".format(mol0_i))
 
     # Find the centre of mass
     mol0_com = mol_coms[mol0_i]
