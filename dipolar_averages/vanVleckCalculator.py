@@ -8,8 +8,6 @@ crystals, including the effects of rotational motion.
 Made by Simone Sturniolo and Paul Hodgkinson for CCP-NC (2021-23)
 """
 
-# TODO  Add useful tolerances to command-line arguments
-
 import re
 import warnings
 import sys
@@ -420,7 +418,7 @@ class RotationAxis(object):
         else:
             if natoms != 2:
                 raise ValueError('Invalid axis: {} does not define two atoms'
-                             ' in molecule'.format(self.axis_str))
+                             ' in molecule ({} matching atoms found)'.format(self.axis_str, natoms))
 
             i1, i2 = ax_indices
             p1, p2 = ps
@@ -535,6 +533,15 @@ class RotatingMolecule(object):
         # CIF labels
         self.labels = self.s.get_array('site_labels')
 
+        if element:
+            indices = np.where(self.symbols == element)[0]
+        else:
+            indices = np.arange(len(self.s))
+
+# Exit if molecule doesn't contain element of interest
+        if len(indices) == 0:
+            raise KeyError("No valid indices found!")
+
         # Now analyze how each axis affects the molecule
         self.rotations = []
         for ax in axes:
@@ -572,13 +579,6 @@ class RotatingMolecule(object):
 
         self.rot_positions = np.array(rot_positions)
 
-        if element:
-            indices = np.where(self.symbols == element)[0]
-        else:
-            indices = np.arange(len(self.s))
-
-        if len(indices) == 0:
-            raise KeyError("No valid indices found!")
         self.selected_rotpos = [(self.labels[i], self.rot_positions[i]) for i in indices]
 
 
@@ -651,6 +651,9 @@ def cli():
     parser.add_argument('--radius', '-r', dest="radius", type=float,
                         default=10.0,
                         help="Radius over which to include molecules (in Å)")
+    parser.add_argument('--CoMtolerance', dest="CoMtolerance", type=float,
+                        default=0.1,
+                        help="Maximum distance of axis from centre of mass (in Å)")
 #    parser.add_argument('--euler_rotation', '-er', dest="euler_rotation",
 #                        nargs=3, type=float,
 #                        help="Calculate for single orientation (rather than "
@@ -691,7 +694,7 @@ def cli():
 
     def addaxes(axislist, axistype, forceCoM=True):
         for a in axislist:
-            axes.append(RotationAxis(a, axistype, forceCoM))
+            axes.append(RotationAxis(a, axistype, forceCoM, off_com_tol=args.CoMtolerance))
 
     addaxes(args.axes, AxisType.NORMAL, False)
     addaxes(args.CoMaxes, AxisType.NORMAL)
@@ -735,7 +738,7 @@ def cli():
     # Note we can break here since axis labels are unique
                         break
             if mol0_i is None:
-                sys.exit("Failed to find a molecule satisying axis definition(s)")
+                sys.exit("Failed to find a molecule satisfying axis definition(s)")
         if verbose:
             print("Found key molecule: {}".format(mol0_i))
 
