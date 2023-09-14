@@ -8,8 +8,6 @@ crystals, including the effects of rotational motion.
 Made by Simone Sturniolo and Paul Hodgkinson for CCP-NC (2021-23)
 """
 
-#TODO Only computes over rotating molecules. M2 needs to consider all H containing
-
 import re
 import warnings
 import sys
@@ -710,10 +708,6 @@ def cli():
     Z = len(mols)
     Zp = len(mol_types)
 
-    totaldegfactor = sum([len(mols) for mols in mol_types.values()])
-    if verbose:
-        print("Total degeneracy: {}".format(totaldegfactor))
-
     moli_to_moltype = dict()
     for key, molis in mol_types.items():
         for moli in molis:
@@ -724,41 +718,44 @@ def cli():
     R = args.radius
 
     atomsmols = [mol.subset(structure) for mol in mols]
-    moltypes_with_element = []
+    moltypes_with_element = set()
+    refmollist = []
 
     for key, mollist in mol_types.items():
         mol0 = mollist[0]
         if element in atomsmols[mol0].get_chemical_symbols():
-            moltypes_with_element.append(key)
+            refmollist.append((mol0, len(mollist)))
+            moltypes_with_element.add(key)
 
     if verbose:
         print("Signatures of (unique) molecules with element {}: {}".format(element, moltypes_with_element))
     if len(moltypes_with_element) == 0:
         sys.exit("No molecule contains element {}".format(element))
     print("Number of distinct molecules containing {}: {} out of {}".format(element, len(moltypes_with_element), Zp))
+    if verbose:
+        print("Indices of reference molecules: {}".format(refmollist))
 
     # Find associated of axes with molecules
     axes_in_moltype = defaultdict(list)
-    refmolset = set()
+    rotmolset = set()
     for axis in axes:
         foundaxis = False
         for key, mollist in mol_types.items():
             mol0 = mollist[0]
             if axis.check_structure(atomsmols[mol0]):
                 axes_in_moltype[key].append(axis)
-                refmolset.add(mol0)
+                rotmolset.add(mol0)
                 foundaxis = True
         if not foundaxis:
             sys.exit("Failed to find molecule in which axis {} is present".format(axis))
-    refmollist = sorted(refmolset)
+
     if axes:
         if verbose:
             print("Mapping between axes and molecular signatures: {}".format(axes_in_moltype))
-            print("Indices of reference molecules: {}".format(refmollist))
-        print("Number of distinct reference molecules: {} out of {}".format(len(axes_in_moltype), Zp))
+        print("Number of distinct rotating molecules: {} out of {}".format(len(axes_in_moltype), Zp))
 
-    if axes and (len(axes_in_moltype) < len(moltypes_with_element)):
-        print("Warning: {} molecules containing {}, but only {} is/are rotating. Check all axes defined.".format(len(moltypes_with_element), element, len(axes_in_moltype)))
+        if len(axes_in_moltype) < len(moltypes_with_element):
+            print("Warning: {} molecules containing {}, but only {} is/are rotating. Check all axes defined.".format(len(moltypes_with_element), element, len(axes_in_moltype)))
 
 
     # Determine the shape of supercell required to include a given radius
@@ -768,16 +765,15 @@ def cli():
     # fxy in fractional
     fxyz, xyz = supcell_gridgen(structure.get_cell(), scell)
 
-    intra_moments_dict = defaultdict(list)
-    inter_moments_dict = defaultdict(list)
 
     M2scaling_factor = (3.0/5)*el_I*(el_I+1)
-    total_mean_dSS_inter = 0.0
-    total_mean_dSS_intra = 0.0
+    total_dSS_inter = 0.0
+    total_dSS_intra = 0.0
+    total_natoms = 0
 
     # Determine distances between CoM of each molecule combined
     # with each supercell offset and CoM of reference molecule
-    for mol0_i in refmollist:
+    for mol0_i, degfactor in refmollist:
         mol_dists = np.linalg.norm(mol_coms[:, None, :]-mol_coms[mol0_i]+xyz[None, :, :],
                                    axis=-1)
     # Identify indices of molecules (within mol_dists) that lie within radius
@@ -787,23 +783,17 @@ def cli():
         sphere_i = np.where((mol_dists <= R)*(mol_dists > 0))
 
     # Always start with the centre
-        rmols = [RotatingMolecule(structure, mols[mol0_i], axes, element=element)]
+        refmoltype = moli_to_moltype[mol0_i]
+        rmols = [RotatingMolecule(structure, mols[mol0_i], axes_in_moltype[refmoltype], element=element)]
     # Now create RotatingMolecule objects for the `other' molecules
         for mol_i, cell_i in zip(*sphere_i):
             moltype = moli_to_moltype[mol_i]
-            try:
+            if moltype in moltypes_with_element:
                 rmols.append(RotatingMolecule(structure, mols[mol_i], axes_in_moltype[moltype], fxyz[cell_i],
                                 element=element))
-            except KeyError:
-    # ignore molecules not containing element
-                pass
 
-        moltype = moli_to_moltype[mol0_i]
-        degfactor = len(mol_types[moltype]) if Zp > 1 else 1
-        print("Number of molecules for intermolecular interactions for central molecule {}: "
-              "{}".format(mol0_i, len(rmols)-1))
-        if (Zp > 1) and verbose:
-            print("Degeneracy factor: {}".format(degfactor))
+        print("Number of {}-containing molecules for intermolecular interactions for reference molecule {}: "
+              "{}".format(element, mol0_i, len(rmols)-1))
 
     # Now go on to compute the actual couplings
 
@@ -812,6 +802,8 @@ def cli():
         natoms = len(rmol0_rotpos)
         intra_moments = np.zeros(natoms)
         inter_moments = np.zeros(natoms)
+        intra_moments_dict = defaultdict(list)
+        inter_moments_dict = defaultdict(list)
 
         for i, (_, pos1) in enumerate(rmol0_rotpos):
 
@@ -833,8 +825,8 @@ def cli():
 
         for i in range(natoms):
             lab = rmol0_rotpos[i][0]
-            intra_moments_dict[(lab, degfactor)].append(intra_moments[i])
-            inter_moments_dict[(lab, degfactor)].append(inter_moments[i])
+            intra_moments_dict[lab].append(intra_moments[i])
+            inter_moments_dict[lab].append(inter_moments[i])
 
         print("Label\tIntra-drss/kHz\tInter-drss/kHz\tTotal drss/kHz")
 
@@ -842,7 +834,7 @@ def cli():
             dataout = [(rmol0_rotpos[i][0], intra_moments[i], inter_moments[i]) for i in range(natoms)]
             dataout.sort()
             for lab, intram, interm in dataout:
-                print("{}(x{})\t{:.2f} \t{:.2f} \t{:.2f}".format(lab, degfactor, intram**0.5, interm**0.5, (intram+interm)**0.5))
+                print("{}\t{:.2f} \t{:.2f} \t{:.2f}".format(lab, intram**0.5, interm**0.5, (intram+interm)**0.5))
         else:
             def checkequiv(vals):
                 """ Check values that are expected to be same within rounding error
@@ -860,30 +852,35 @@ def cli():
                                        "tolerance".format(dSS_equiv_rtol))
                 return mean
 
-            for labdeg, intram in intra_moments_dict.items():
-                lab, _ = labdeg
+            for lab, intram in intra_moments_dict.items():
                 intram = checkequiv(intram)
-                interm = checkequiv(inter_moments_dict[labdeg])
+                interm = checkequiv(inter_moments_dict[lab])
 
-                print("{}(x{})\t{:.2f} \t{:.2f} \t{:.2f}".format(lab, degfactor, intram**0.5, interm**0.5, (intram+interm)**0.5))
+                print("{}\t{:.2f} \t{:.2f} \t{:.2f}".format(lab, intram**0.5, interm**0.5, (intram+interm)**0.5))
 
-        weighted_mean_dSS_intra = (degfactor*np.mean(intra_moments))/totaldegfactor
-        weighted_mean_dSS_inter = (degfactor*np.mean(inter_moments))/totaldegfactor
-        weighted_total_dSS = weighted_mean_dSS_intra + weighted_mean_dSS_inter
+        mean_dSS_intra = np.mean(intra_moments)
+        mean_dSS_inter = np.mean(inter_moments)
+        mean_dSS_total = mean_dSS_intra + mean_dSS_inter
 
-        print("Intramolecular contribution to overall mean d_SS: {:.2f} kHz^2".format(
-            weighted_mean_dSS_intra))
-        print("Intermolecular contribution to overall mean d_SS at "
-              "{:g} Å: {:.2f} kHz^2".format(R, weighted_mean_dSS_inter))
-        print("Mean d_SS: {:.2f} kHz^2    Mean d_RSS {:.2f} kHz".format(weighted_total_dSS, weighted_total_dSS**0.5))
+        if Zp > 1:
+            print("dSS values for reference molecule {} (x{})".format(mol0_i, degfactor))
+        print("Intramolecular mean d_SS: {:.2f} kHz^2".format(mean_dSS_intra))
+        print("Intermolecular mean d_SS at "
+              "{:g} Å: {:.2f} kHz^2".format(R, mean_dSS_inter))
+        print("Mean d_SS: {:.2f} kHz^2    Mean d_RSS {:.2f} kHz".format(mean_dSS_total, mean_dSS_total**0.5))
 
-        total_mean_dSS_intra += weighted_mean_dSS_intra
-        total_mean_dSS_inter += weighted_mean_dSS_inter
+        total_dSS_intra += degfactor * natoms * mean_dSS_intra
+        total_dSS_inter += degfactor * natoms * mean_dSS_inter
+        total_natoms += degfactor * natoms
 
-    total_mean_dSS = total_mean_dSS_intra + total_mean_dSS_inter
-    print("\nOverall mean d_SS: {:.2f} kHz^2    Overall mean d_RSS {:.2f} kHz".format(total_mean_dSS, total_mean_dSS**0.5))
-    print("Second moment: {:.2f} (Intra: {:.2f}  Inter: {:.2f}) kHz^2".format(total_mean_dSS*M2scaling_factor,
-                        total_mean_dSS_intra*M2scaling_factor, total_mean_dSS_inter*M2scaling_factor))
+    if verbose:
+        print("Total {} atoms considered: {}".format(element, total_natoms))
+    mean_dSS_intra = total_dSS_intra / total_natoms
+    mean_dSS_inter = total_dSS_inter / total_natoms
+    mean_dSS = mean_dSS_intra + mean_dSS_inter
+    print("\nOverall mean d_SS: {:.2f} kHz^2    Overall mean d_RSS {:.2f} kHz".format(mean_dSS, mean_dSS**0.5))
+    print("Second moment: {:.2f} (Intra: {:.2f}  Inter: {:.2f}) kHz^2".format(mean_dSS*M2scaling_factor,
+                        mean_dSS_intra*M2scaling_factor, mean_dSS_inter*M2scaling_factor))
 
 
 if __name__ == "__main__":
