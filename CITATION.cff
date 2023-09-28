@@ -1,0 +1,31 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: Dipolar Averages
+message: >-
+  If you use this software, please cite it using the
+  metadata from this file.
+type: software
+authors:
+  - given-names: Simone
+    family-names: Sturniolo
+    orcid: 'https://orcid.org/0000-0003-4851-1144'
+    affiliation: Science and Technology Facilities Council
+  - given-names: J. Kane
+    family-names: Shenton
+    email: kane.shenton@stfc.ac.uk
+    affiliation: Science and Technology Facilities Council
+    orcid: 'https://orcid.org/0000-0003-4485-3446'
+  - given-names: Paul
+    family-names: Hodgkinson
+    email: paul.hodgkinson@durham.ac.uk
+    affiliation: Durham University
+    orcid: 'https://orcid.org/0000-0003-0327-3349'
+identifiers:
+  - type: doi
+    value: 10.1063/5.0151022
+    description: Paper associated with software tool
+repository-code: 'https://github.com/CCP-NC/dipolar_averages'
+repository: 'https://durham-repository.worktribe.com/output/1720523'
+license: MIT
