@@ -52,12 +52,12 @@ It is assumed that the structure is of a three-dimensional molecular crystal. Th
 and space group information are used to determine the atomic coordinates of molecules within a specified
 radius of the "origin" molecule.
 
-The principal "use case" is motion in plastic crystals, where there is one molecule type
+The initial "use case" was motion in plastic crystals, where there is one molecule type
 which share the same dynamic process, with no significant correlation between the motion of different
-molecules. In principle, the code supports systems in which there is more than one molecule in the unit
-cell (Z' > 1), but this code has not been tested and issues can be expected.
+molecules. The code has recently been extended to improve support for systems with more than one molecule 
+in the unit cell (Z' > 1). 
 
-Motions are currently limited to rotational diffusion about specified axes. Axis specifications are in
+Motions are currently limited to rotational diffusion of whole molecules about specified axes. Axis specifications are in
 terms of site labels within an individual molecule, with four specifications supported:
 - Axes passing through a pair of atoms e.g. --axis C1,C2. Such axes must pass
 through the centre of mass (CoM) within a tolerance, currently 0.1 Å,
