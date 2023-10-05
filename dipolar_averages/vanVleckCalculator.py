@@ -27,6 +27,8 @@ from ase.quaternions import Quaternion
 
 verbose = 0
 
+autoaveragemethyl = True
+
 # dSS values from sites with the same CIF label are expected to be equivalent
 # under rotations corresponding to a molecular symmetry. This sets the
 # fractional tolerance, and can be quite low due to analytical calculation.
@@ -92,6 +94,84 @@ def read_with_labels(fname):
         raise KeyError("Didn't find site labels in input file %s" %
                        fname) from exc
     return struct
+
+
+# Note code taken from Soprano branch - eventually use directly from final Soprano home
+# Unclear what function of tags argument is
+def find_XHn_groups(atoms, pattern_string, tags=None, vdw_scale=1.0):
+    """Find groups of atoms based on a functional group pattern.
+    The pattern is a string such as CH3 or CH2.
+    It must contain an element symbol, H and the number of H atoms.
+    Multiple patterns can be separated by , e.g. NH3,CH3.
+
+
+    Parameters:
+       atoms (ase.Atoms): Atoms object on which to perform selection
+       pattern_string (str): functional group pattern e.g. 'CH3'
+                            for a methyl group. Assumes the group is
+                            the thing(s) connected to the first atom.
+                            They can be combined, comma separated.
+                            TODO: add SMILES/SMARTS support?
+       vdw_scale (float): scale factor for vdw radius (used for bond searching).
+                           Default 1.0.
+
+    Returns:
+        List (per pattern string) of list of groups, as lists of atom indices
+
+    Raises:
+        ValueError: Parsing failure on `pattern_string`
+
+    """
+    from soprano.properties.linkage import Bonds
+
+    if tags is None:
+        tags = np.arange(len(atoms))
+
+    bcalc = Bonds(vdw_scale=vdw_scale, return_matrix=True)
+    bonds, bmat = bcalc(atoms)
+
+    symbs = np.array(atoms.get_chemical_symbols())
+    hinds = np.where(symbs == "H")[0]
+
+    all_groups = []
+    for group_pattern in pattern_string.split(','):
+        # split into central element and number of H atoms
+        if 'H' not in group_pattern:
+            raise ValueError(f'{group_pattern} is not a valid group pattern '
+                             '(must contain an element symbol, H, and the number of H atoms. e.g. CH3)')
+        X, nstr = group_pattern.split('H')
+        try:
+            n = int(nstr)
+        except ValueError:
+            raise ValueError(f'{nstr} could not be parsed as integer')
+        if not X or (len(X) > 2):
+            raise ValueError(f'"{X}" is not a valid element symbol')
+
+        # Find XHn groups
+        groups = []
+        xinds = np.where(symbs == X)[0]
+        xinds = xinds[np.where(np.sum(bmat[xinds][:, hinds], axis=1) == n)[0]]
+        # group_tags = np.ones((len(xinds), n), dtype=int)
+        seen_tags = []
+        for ix, xind in enumerate(xinds):
+            group = list(np.where(bmat[xind][hinds] == 1)[0])
+            assert len(group) == n
+            match = []
+            if len(seen_tags) > 0:
+                match = np.where((seen_tags == tags[group]).all(axis=1))[0]
+
+            if len(match) == 1:
+                # how to handle this?
+                groups[match[0]] += group
+            elif len(match) == 0:
+                seen_tags.append(tags[group])
+                groups.append(group)
+            else:
+                raise ValueError(f'Found multiple matches for {group_pattern}')
+
+        all_groups.append(groups)
+
+    return all_groups
 
 
 def molecule_crystallographic_types(struct):
@@ -503,7 +583,7 @@ class RotatingMolecule(object):
     element is passed to initialiser.
     """
 
-    def __init__(self, s, mol, axes, ijk=[0, 0, 0], element=None,
+    def __init__(self, s, mol, axes, averagegroups=None, ijk=[0, 0, 0], element=None,
                  checkaxes=True):
         """
         Parameters
@@ -514,6 +594,8 @@ class RotatingMolecule(object):
             Selector for molecule of interest
         axes : list of RotationAxis objects
             Axis definitions (empty list corresponds to no rotation)
+        averagegroups: list of list of indices
+            Groups of 3H atoms to average
         ijk : 3-vector, optional
             Cell offset in fractional co-ordinates. Default is no offset
         element : character
@@ -528,6 +610,18 @@ class RotatingMolecule(object):
                              self.cell.cartesian_positions(ijk))
         self.positions = self.s.get_positions()
         self.symbols = np.array(self.s.get_chemical_symbols())
+# sanity check groups input
+        self.averagegroups = averagegroups
+        if averagegroups is not None:
+            allinds = []
+            for group in averagegroups:
+                if len(group) != 3:
+                    raise ValueError("All averaging groups need to have 3 atoms (found {})".format(len(group)))
+                allinds += group
+            uniqueelements = set(self.symbols[allinds])
+            if uniqueelements != {'H'}:
+                raise ValueError("averagegroups should correspond to H atoms only. Found {}".format(uniqueelements))
+
         self.com = self.s.get_center_of_mass()  # Duplicates previous CoM calculation?
 
         # CIF labels
@@ -541,6 +635,7 @@ class RotatingMolecule(object):
 # Exit if molecule doesn't contain element of interest
         if len(indices) == 0:
             raise KeyError("No valid indices found!")
+
 
         # Now analyze how each axis affects the molecule
         self.rotations = []
@@ -720,12 +815,22 @@ def cli():
     atomsmols = [mol.subset(structure) for mol in mols]
     moltypes_with_element = set()
     refmollist = []
+    methyls_in_refmol = dict()
+
+    if autoaveragemethyl and (element != 'H'):
+        raise RuntimeError("autoaveragemethyl only valid when element is H")
 
     for key, mollist in mol_types.items():
         mol0 = mollist[0]
-        if element in atomsmols[mol0].get_chemical_symbols():
+        atomsmols0 = atomsmols[mol0]
+        if element in atomsmols0.get_chemical_symbols():
             refmollist.append((mol0, len(mollist)))
             moltypes_with_element.add(key)
+            if autoaveragemethyl:
+                groups = find_XHn_groups(atomsmols0, 'CH3')[0]
+                methyls_in_refmol[mol0] = groups
+                if verbose:
+                    print(groups)
 
     if verbose:
         print("Signatures of (unique) molecules with element {}: {}".format(element, moltypes_with_element))
@@ -784,13 +889,14 @@ def cli():
 
     # Always start with the centre
         refmoltype = moli_to_moltype[mol0_i]
-        rmols = [RotatingMolecule(structure, mols[mol0_i], axes_in_moltype[refmoltype], element=element)]
+        averagegroups = methyls_in_refmol[mol0_i] if methyls_in_refmol else None
+        rmols = [RotatingMolecule(structure, mols[mol0_i], axes_in_moltype[refmoltype], averagegroups=averagegroups, element=element)]
     # Now create RotatingMolecule objects for the `other' molecules
         for mol_i, cell_i in zip(*sphere_i):
             moltype = moli_to_moltype[mol_i]
             if moltype in moltypes_with_element:
-                rmols.append(RotatingMolecule(structure, mols[mol_i], axes_in_moltype[moltype], fxyz[cell_i],
-                                element=element))
+                rmols.append(RotatingMolecule(structure, mols[mol_i], axes_in_moltype[moltype], ijk=fxyz[cell_i],
+                                 averagegroups=averagegroups, element=element))
 
         print("Number of {}-containing molecules for intermolecular interactions for reference molecule {}: "
               "{}".format(element, mol0_i, len(rmols)-1))
