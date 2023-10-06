@@ -28,6 +28,7 @@ from ase.quaternions import Quaternion
 verbose = 0
 
 autoaveragemethyl = True
+dev_tolerance = 0.05 # Maximum difference in HH distances between nominally equivalent pairs
 
 # dSS values from sites with the same CIF label are expected to be equivalent
 # under rotations corresponding to a molecular symmetry. This sets the
@@ -116,10 +117,13 @@ def find_XHn_groups(atoms, pattern_string, tags=None, vdw_scale=1.0):
                            Default 1.0.
 
     Returns:
-        List (per pattern string) of list of groups, as lists of atom indices
+        List (per pattern string) of list of groups, as 1D numpy arrays
+        of atom indices.
 
     Raises:
         ValueError: Parsing failure on `pattern_string`
+
+
 
     """
     from soprano.properties.linkage import Bonds
@@ -149,12 +153,14 @@ def find_XHn_groups(atoms, pattern_string, tags=None, vdw_scale=1.0):
 
         # Find XHn groups
         groups = []
-        xinds = np.where(symbs == X)[0]
-        xinds = xinds[np.where(np.sum(bmat[xinds][:, hinds], axis=1) == n)[0]]
+        allxinds = np.where(symbs == X)[0]
+        xinds = allxinds[np.where(np.sum(bmat[allxinds][:, hinds], axis=1) == n)[0]]
         # group_tags = np.ones((len(xinds), n), dtype=int)
         seen_tags = []
         for ix, xind in enumerate(xinds):
-            group = list(np.where(bmat[xind][hinds] == 1)[0])
+# Note that result is an index into the H's NOT the overall atom list
+            groupasHinds = list(np.where(bmat[xind][hinds] == 1)[0])
+            group = hinds[groupasHinds]
             assert len(group) == n
             match = []
             if len(seen_tags) > 0:
@@ -538,6 +544,17 @@ class RotationAxis(object):
         return self.axis_str
 
 
+def getpairwise(a):
+    """ Generate unique pairs of list members taken pairwise """
+
+    n = len(a)
+    if n < 2:
+        raise ValueError("getpairwise only valid for lists with >1 member")
+    for i in range(n-1):
+        for j in range(i+1, n):
+            yield a[i], a[j]
+
+
 class RotatingMolecule(object):
     """ Class defining a rotating molecule
 
@@ -556,12 +573,10 @@ class RotatingMolecule(object):
         Element labels of atoms of `s`
     labels : array of string
         Site labels of atoms of `s`
-    rot_positions : 3-dimensional array
-        All atomic positions rotated through each combination of rotations
+    selected_rotpos : list of tuples of (atom index, atom position)
+        All `element` positions rotated through each combination of rotations
         First index is atom number, second is rotation index, last
         dimension is 3-vector
-    selected_rotpos : list of tuples of (atom label, atom position)
-        Resclicing of `rot_positions` selecting only `element`
 
     Notes
     -----
@@ -608,19 +623,34 @@ class RotatingMolecule(object):
         self.s = mol.subset(s, use_cell_indices=True)
         self.s.set_positions(self.s.get_positions() +
                              self.cell.cartesian_positions(ijk))
-        self.positions = self.s.get_positions()
+        positions = self.s.get_positions()
+        self.averagedpositions = positions.copy()
         self.symbols = np.array(self.s.get_chemical_symbols())
-# sanity check groups input
-        self.averagegroups = averagegroups
+        self.specialatoms = set()
+        self.specialivecs = []
         if averagegroups is not None:
-            allinds = []
-            for group in averagegroups:
+            for groupn, group in enumerate(averagegroups):
                 if len(group) != 3:
                     raise ValueError("All averaging groups need to have 3 atoms (found {})".format(len(group)))
-                allinds += group
-            uniqueelements = set(self.symbols[allinds])
-            if uniqueelements != {'H'}:
-                raise ValueError("averagegroups should correspond to H atoms only. Found {}".format(uniqueelements))
+                uniqueelements = set(self.symbols[group])
+                if uniqueelements != {'H'}:
+                    raise ValueError("averagegroups should correspond to H atoms only. Found {}".format(uniqueelements))
+                self.specialatoms.update(group)
+                vectors = [positions[j] - positions[i] for i, j in getpairwise(group)]
+                distances = np.linalg.norm(vectors, axis=1)
+                meandistance = np.mean(distances)
+                maxdev = np.max(distances) - np.min(distances)
+                if maxdev > dev_tolerance:
+                    print("Warning: distances between H differ by {:.2f} A (tolerance: {} A)".format(maxdev, dev_tolerance))
+                meanpos = np.mean(positions[group], axis=0)
+                print("Averaged position averaging group {}: {}".format(groupn, meanpos))
+                crossprod = np.cross(vectors[0], vectors[1])
+                crossprod /= np.linalg.norm(crossprod)
+                print("Unit vector for averaging group {}: {}".format(groupn, crossprod))
+                self.specialivecs.append(crossprod)
+                self.averagedpositions[group] = meanpos
+            if verbose:
+                print("Atoms involved involved in special groups: {}".format(self.specialatoms))
 
         self.com = self.s.get_center_of_mass()  # Duplicates previous CoM calculation?
 
@@ -658,9 +688,10 @@ class RotatingMolecule(object):
             if verbose:
                 print("Axis checks passed")
 
+# TODO currently rotates all atoms, but only stores element positions
         if len(self.rotations) == 0:
             # Just regular positions...
-            rot_positions = self.positions[:, None, :]
+            rot_positions = self.averagedpositions[:, None, :]
         else:
             rot_positions = []
             for p in self.positions:
@@ -672,9 +703,9 @@ class RotatingMolecule(object):
                     all_rotations = np.concatenate(all_rotations) # Some kind of flattening?
                 rot_positions.append(all_rotations)
 
-        self.rot_positions = np.array(rot_positions)
+        rot_positions = np.array(rot_positions)
 
-        self.selected_rotpos = [(self.labels[i], self.rot_positions[i]) for i in indices]
+        self.selected_rotpos = [(i, rot_positions[i]) for i in indices]
 
 
     @staticmethod
@@ -830,6 +861,7 @@ def cli():
                 groups = find_XHn_groups(atomsmols0, 'CH3')[0]
                 methyls_in_refmol[mol0] = groups
                 if verbose:
+                    print("Indices of H atoms in methyl groups for molecule {}".format(mol0))
                     print(groups)
 
     if verbose:
@@ -904,6 +936,7 @@ def cli():
     # Now go on to compute the actual couplings
 
         rmol0_rotpos = rmols[0].selected_rotpos
+        specialatoms = rmols[0].specialatoms
 
         natoms = len(rmol0_rotpos)
         intra_moments = np.zeros(natoms)
@@ -911,10 +944,16 @@ def cli():
         intra_moments_dict = defaultdict(list)
         inter_moments_dict = defaultdict(list)
 
-        for i, (_, pos1) in enumerate(rmol0_rotpos):
+# TODO Need to handle special atoms
+
+        for i, (atomi, pos1) in enumerate(rmol0_rotpos):
+            if atomi in specialatoms:
+                continue
 
             # Intramolecular couplings
-            for j, (_, pos2) in enumerate(rmol0_rotpos[i+1:]):
+            for j, (atomj, pos2) in enumerate(rmol0_rotpos[i+1:]):
+                if atomj in specialatoms:
+                    continue
                 D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=True)
                 D2 = D2_contribution(D, B_axis)
 
@@ -925,19 +964,23 @@ def cli():
             # For everything else we can't save time the same way
             for rmol2 in rmols[1:]:
                 rmol2_rotpos = rmol2.selected_rotpos
-                for _, pos2 in rmol2_rotpos:
-                    D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=False)
-                    inter_moments[i] += D2_contribution(D, B_axis)
+                specialatoms2 = rmol2.specialatoms
+                for atom2, pos2 in rmol2_rotpos:
+                    if atom2 not in specialatoms2:
+                        D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=False)
+                        inter_moments[i] += D2_contribution(D, B_axis)
+
+        labels = rmols[0].labels
 
         for i in range(natoms):
-            lab = rmol0_rotpos[i][0]
+            lab = labels[rmol0_rotpos[i][0]]
             intra_moments_dict[lab].append(intra_moments[i])
             inter_moments_dict[lab].append(inter_moments[i])
 
         print("Label\tIntra-drss/kHz\tInter-drss/kHz\tTotal drss/kHz")
 
         if args.nomerge:
-            dataout = [(rmol0_rotpos[i][0], intra_moments[i], inter_moments[i]) for i in range(natoms)]
+            dataout = [(labels[rmol0_rotpos[i][0]], intra_moments[i], inter_moments[i]) for i in range(natoms)]
             dataout.sort()
             for lab, intram, interm in dataout:
                 print("{}\t{:.2f} \t{:.2f} \t{:.2f}".format(lab, intram**0.5, interm**0.5, (intram+interm)**0.5))
