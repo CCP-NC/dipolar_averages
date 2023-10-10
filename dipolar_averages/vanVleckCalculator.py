@@ -261,6 +261,32 @@ def average_dipolar_tensor(p1, p2, gamma, intramolecular):
     return NMRTensor(D, order=dipole_tensor_convention)
 
 
+def average_special_dipolar_tensor(d, ps):
+    """Average tensor tensor from groups of Hs
+
+    Parameters
+    ----------
+    d : dipolar coupling constant
+    p : set of unit vectors corresponding to orientations
+
+    Returns
+    -------
+    NMRTensor object
+        Averaged dipolar coupling tensor (in same units as d)
+    """
+
+    # Construct dipolar tensors (Cartesian 3 x 3 matrices) and average
+    Ds = []
+    eye3 = np.eye(3)
+    for p in ps:
+        pn = np.array(p)
+        Ds.append(3*pn[:, None]*pn[None,:]-eye3)
+    D = d * np.average(Ds, axis=0)
+
+    # Convert to tensor object for readout
+    return NMRTensor(D, order=dipole_tensor_convention)
+
+
 # Original formulation matching the van Vleck derivation (rather than D_rss)
 #
 # def van_vleck_contribution(D, I, axis=None):
@@ -627,7 +653,8 @@ class RotatingMolecule(object):
         self.averagedpositions = positions.copy()
         self.symbols = np.array(self.s.get_chemical_symbols())
         self.specialatoms = set()
-        self.specialivecs = []
+        self.specialtensors = []
+        self.averagegroups = averagegroups
         if averagegroups is not None:
             for groupn, group in enumerate(averagegroups):
                 if len(group) != 3:
@@ -646,8 +673,12 @@ class RotatingMolecule(object):
                 print("Averaged position averaging group {}: {}".format(groupn, meanpos))
                 crossprod = np.cross(vectors[0], vectors[1])
                 crossprod /= np.linalg.norm(crossprod)
-                print("Unit vector for averaging group {}: {}".format(groupn, crossprod))
-                self.specialivecs.append(crossprod)
+# Factor of -0.5 is for rotation perpendicular to plane of internuclear vector
+                el_gamma = _get_isotope_data([element], 'gamma')[0]
+                scaledd = -0.5*_dip_constant(meandistance*1e-10, el_gamma, el_gamma)*1e-3
+                print("Scaled d and unit vector for averaging group {}: {} kHz, {}".format(groupn, scaledd, crossprod))
+
+                self.specialtensors.append((scaledd, crossprod))
                 self.averagedpositions[group] = meanpos
             if verbose:
                 print("Atoms involved involved in special groups: {}".format(self.specialatoms))
@@ -688,13 +719,10 @@ class RotatingMolecule(object):
             if verbose:
                 print("Axis checks passed")
 
-# TODO currently rotates all atoms, but only stores element positions
-        if len(self.rotations) == 0:
-            # Just regular positions...
-            rot_positions = self.averagedpositions[:, None, :]
-        else:
+
+        def do_rotations(ps):
             rot_positions = []
-            for p in self.positions:
+            for p in ps:
                 all_rotations = [p]
                 # successively apply rotations to initial point
                 for rot_def in self.rotations:
@@ -702,10 +730,25 @@ class RotatingMolecule(object):
                                      for x in all_rotations]
                     all_rotations = np.concatenate(all_rotations) # Some kind of flattening?
                 rot_positions.append(all_rotations)
+            return rot_positions
+
+
+# TODO currently rotates all atoms, but only stores element positions
+        if len(self.rotations) == 0:
+            # Just regular positions...
+            rot_positions = self.averagedpositions[:, None, :]
+        else:
+            rot_positions = do_rotations(self.positions)
 
         rot_positions = np.array(rot_positions)
 
         self.selected_rotpos = [(i, rot_positions[i]) for i in indices]
+
+        self.specialaveragetensors = []
+        for d, ivec in self.specialtensors:
+            rotvecs = do_rotations(ivec)
+            averageD = average_special_dipolar_tensor(d, rotvecs)
+            self.specialaveragetensors.append(averageD)
 
 
     @staticmethod
@@ -944,31 +987,31 @@ def cli():
         intra_moments_dict = defaultdict(list)
         inter_moments_dict = defaultdict(list)
 
-# TODO Need to handle special atoms
-
         for i, (atomi, pos1) in enumerate(rmol0_rotpos):
-            if atomi in specialatoms:
-                continue
 
             # Intramolecular couplings
-            for j, (atomj, pos2) in enumerate(rmol0_rotpos[i+1:]):
-                if atomj in specialatoms:
-                    continue
-                D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=True)
-                D2 = D2_contribution(D, B_axis)
+            if atomi not in specialatoms:
+                for j, (atomj, pos2) in enumerate(rmol0_rotpos[i+1:]):
+                    D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=True)
+                    D2 = D2_contribution(D, B_axis)
 
-                # Add contribution to intramolecular sum for both spins
-                intra_moments[i] += D2
-                intra_moments[i+j+1] += D2
+                    # Add contribution to intramolecular sum for both spins
+                    intra_moments[i] += D2
+                    intra_moments[i+j+1] += D2
 
             # For everything else we can't save time the same way
             for rmol2 in rmols[1:]:
                 rmol2_rotpos = rmol2.selected_rotpos
-                specialatoms2 = rmol2.specialatoms
                 for atom2, pos2 in rmol2_rotpos:
-                    if atom2 not in specialatoms2:
-                        D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=False)
-                        inter_moments[i] += D2_contribution(D, B_axis)
+                    D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=False)
+                    inter_moments[i] += D2_contribution(D, B_axis)
+
+# Account for intermolecular coupling within averaging groups
+        for groupn, group in enumerate(rmols[0].averagegroups):
+            D2 = D2_contribution(rmols[0].specialtensors[groupn], B_axis)
+            for i, j in getpairwise(group):
+                intra_moments[i] += D2
+                intra_moments[i+j+1] += D2
 
         labels = rmols[0].labels
 
