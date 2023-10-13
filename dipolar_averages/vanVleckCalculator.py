@@ -25,6 +25,9 @@ from soprano.utils import minimum_supcell, supcell_gridgen
 from ase import io
 from ase.quaternions import Quaternion
 
+
+#TODO autoaveragemethyl needs careful test
+
 verbose = 0
 
 autoaveragemethyl = True
@@ -653,8 +656,12 @@ class RotatingMolecule(object):
         self.averagedpositions = positions.copy()
         self.symbols = np.array(self.s.get_chemical_symbols())
         self.specialatoms = set()
-        self.specialtensors = []
+        specialtensors = []
         self.averagegroups = averagegroups
+        self.speciallabels = []
+        # CIF labels
+        self.labels = self.s.get_array('site_labels')
+
         if averagegroups is not None:
             for groupn, group in enumerate(averagegroups):
                 if len(group) != 3:
@@ -678,15 +685,14 @@ class RotatingMolecule(object):
                 scaledd = -0.5*_dip_constant(meandistance*1e-10, el_gamma, el_gamma)*1e-3
                 print("Scaled d and unit vector for averaging group {}: {} kHz, {}".format(groupn, scaledd, crossprod))
 
-                self.specialtensors.append((scaledd, crossprod))
+                specialtensors.append((scaledd, crossprod))
+                self.speciallabels.append(",".join(self.labels[group]))
                 self.averagedpositions[group] = meanpos
             if verbose:
                 print("Atoms involved involved in special groups: {}".format(self.specialatoms))
 
         self.com = self.s.get_center_of_mass()  # Duplicates previous CoM calculation?
 
-        # CIF labels
-        self.labels = self.s.get_array('site_labels')
 
         if element:
             indices = np.where(self.symbols == element)[0]
@@ -745,7 +751,8 @@ class RotatingMolecule(object):
         self.selected_rotpos = [(i, rot_positions[i]) for i in indices]
 
         self.specialaveragetensors = []
-        for d, ivec in self.specialtensors:
+        self.alllabel = self.labels.tolist()
+        for d, ivec in specialtensors:
             rotvecs = do_rotations(ivec)
             averageD = average_special_dipolar_tensor(d, rotvecs)
             self.specialaveragetensors.append(averageD)
@@ -981,9 +988,10 @@ def cli():
         rmol0_rotpos = rmols[0].selected_rotpos
         specialatoms = rmols[0].specialatoms
 
-        natoms = len(rmol0_rotpos)
-        intra_moments = np.zeros(natoms)
-        inter_moments = np.zeros(natoms)
+        nnormal = len(rmol0_rotpos)
+        nspecial = len(rmols[0].averagegroups)
+        intra_moments = np.zeros(nnormal + nspecial)
+        inter_moments = np.zeros(nnormal + nspecial)
         intra_moments_dict = defaultdict(list)
         inter_moments_dict = defaultdict(list)
 
@@ -994,8 +1002,8 @@ def cli():
                 for j, (atomj, pos2) in enumerate(rmol0_rotpos[i+1:]):
                     D = average_dipolar_tensor(pos1, pos2, el_gamma, intramolecular=True)
                     D2 = D2_contribution(D, B_axis)
-
                     # Add contribution to intramolecular sum for both spins
+                    # Note i+j+1 is giving correct index for "second" site (j is 0 for site i+1)
                     intra_moments[i] += D2
                     intra_moments[i+j+1] += D2
 
@@ -1008,22 +1016,29 @@ def cli():
 
 # Account for intermolecular coupling within averaging groups
         for groupn, group in enumerate(rmols[0].averagegroups):
-            D2 = D2_contribution(rmols[0].specialtensors[groupn], B_axis)
-            for i, j in getpairwise(group):
-                intra_moments[i] += D2
-                intra_moments[i+j+1] += D2
+            D2 = D2_contribution(rmols[0].specialaveragetensors[groupn], B_axis)
+# 3 averaged dipolar couplings, added to both atoms of each pair
+            intra_moments[nnormal + groupn] += 6*D2
 
         labels = rmols[0].labels
+        speciallabels = rmols[0].speciallabels
 
-        for i in range(natoms):
+        alllabels = []
+        for i in range(nnormal):
             lab = labels[rmol0_rotpos[i][0]]
+            alllabels.append(lab)
             intra_moments_dict[lab].append(intra_moments[i])
             inter_moments_dict[lab].append(inter_moments[i])
+
+        for i, lab in enumerate(speciallabels):
+            alllabels.append(lab)
+            intra_moments_dict[lab].append(intra_moments[nnormal + i])
+            inter_moments_dict[lab].append(inter_moments[nnormal + i])
 
         print("Label\tIntra-drss/kHz\tInter-drss/kHz\tTotal drss/kHz")
 
         if args.nomerge:
-            dataout = [(labels[rmol0_rotpos[i][0]], intra_moments[i], inter_moments[i]) for i in range(natoms)]
+            dataout = [(lab, intra_moments[i], inter_moments[i]) for i, lab in enumerate(alllabels)]
             dataout.sort()
             for lab, intram, interm in dataout:
                 print("{}\t{:.2f} \t{:.2f} \t{:.2f}".format(lab, intram**0.5, interm**0.5, (intram+interm)**0.5))
@@ -1061,6 +1076,7 @@ def cli():
               "{:g} Å: {:.2f} kHz^2".format(R, mean_dSS_inter))
         print("Mean d_SS: {:.2f} kHz^2    Mean d_RSS {:.2f} kHz".format(mean_dSS_total, mean_dSS_total**0.5))
 
+        natoms = nnormal + 3 * nspecial
         total_dSS_intra += degfactor * natoms * mean_dSS_intra
         total_dSS_inter += degfactor * natoms * mean_dSS_inter
         total_natoms += degfactor * natoms
