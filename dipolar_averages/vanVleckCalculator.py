@@ -505,8 +505,10 @@ class RotationAxis(object):
         ax_indices = np.concatenate((np.where(labels == self.a1)[0],
                                      np.where(labels == self.a2)[0]))
 
+        if set(ax_indices).intersection(rmol.specialatoms):
+            raise ValueError("Axis specification cannot involve atoms in methyl / averaged groups")
         natoms = len(ax_indices)
-        ps = rmol.positions[ax_indices]
+        ps = rmol.averagedpositions[ax_indices]
 
         if self.axistype == AxisType.BISECTOR:
             if natoms < 2:
@@ -743,7 +745,7 @@ class RotatingMolecule(object):
             # Just regular positions...
             rot_positions = self.averagedpositions[:, None, :]
         else:
-            rot_positions = do_rotations(self.positions)
+            rot_positions = do_rotations(self.averagedpositions)
 
         rot_positions = np.array(rot_positions)
 
