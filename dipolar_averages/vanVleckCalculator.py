@@ -26,11 +26,11 @@ from ase import io
 from ase.quaternions import Quaternion
 
 
-#TODO autoaveragemethyl needs careful test
+#TODO autoaveragemethyl needs more testing
+#TODO reduce number of sig. figs. if --autoaveragemethyl used
 
 verbose = 0
 
-autoaveragemethyl = True
 dev_tolerance = 0.05 # Maximum difference in HH distances between nominally equivalent pairs
 
 # dSS values from sites with the same CIF label are expected to be equivalent
@@ -627,7 +627,7 @@ class RotatingMolecule(object):
     element is passed to initialiser.
     """
 
-    def __init__(self, s, mol, axes, averagegroups=None, ijk=[0, 0, 0], element=None,
+    def __init__(self, s, mol, axes, averagegroups=[], ijk=[0, 0, 0], element=None,
                  checkaxes=True):
         """
         Parameters
@@ -658,9 +658,9 @@ class RotatingMolecule(object):
         self.specialatoms = set()
         specialtensors = []
         self.averagegroups = averagegroups
-        self.speciallabels = []
         # CIF labels
         self.labels = self.s.get_array('site_labels')
+        self.atomnotoindex = dict()
 
         if averagegroups is not None:
             for groupn, group in enumerate(averagegroups):
@@ -686,9 +686,8 @@ class RotatingMolecule(object):
                 print("Scaled d and unit vector for averaging group {}: {} kHz, {}".format(groupn, scaledd, crossprod))
 
                 specialtensors.append((scaledd, crossprod))
-                self.speciallabels.append(",".join(self.labels[group]))
                 self.averagedpositions[group] = meanpos
-            if verbose:
+            if verbose and self.specialatoms:
                 print("Atoms involved involved in special groups: {}".format(self.specialatoms))
 
         self.com = self.s.get_center_of_mass()  # Duplicates previous CoM calculation?
@@ -749,6 +748,8 @@ class RotatingMolecule(object):
         rot_positions = np.array(rot_positions)
 
         self.selected_rotpos = [(i, rot_positions[i]) for i in indices]
+        for i, atomi in enumerate(indices):
+            self.atomnotoindex[atomi] = i
 
         self.specialaveragetensors = []
         self.alllabel = self.labels.tolist()
@@ -822,6 +823,8 @@ def cli():
                         help="Specify an axis that bisects a pair of atoms and"
                         " passes through the Centre of Mass as "
                         "first_atom_label[,second_atom_label][:n]")
+    parser.add_argument('--autoaveragemethyl', action="store_true",
+                        help="Detect methyl groups and approximate effects of fast averaging")
     parser.add_argument('--nomerge', dest='nomerge', action="store_true",
                         help="Don't merge results from sites with same label")
     parser.add_argument('--radius', '-r', dest="radius", type=float,
@@ -840,6 +843,7 @@ def cli():
 
     args = parser.parse_args()
     verbose = args.verbose
+    autoaveragemethyl = args.autoaveragemethyl
 
     # testmode = args.structure.startswith("TEST")
     # if testmode:
@@ -971,7 +975,7 @@ def cli():
 
     # Always start with the centre
         refmoltype = moli_to_moltype[mol0_i]
-        averagegroups = methyls_in_refmol[mol0_i] if methyls_in_refmol else None
+        averagegroups = methyls_in_refmol[mol0_i] if methyls_in_refmol else []
         rmols = [RotatingMolecule(structure, mols[mol0_i], axes_in_moltype[refmoltype], averagegroups=averagegroups, element=element)]
     # Now create RotatingMolecule objects for the `other' molecules
         for mol_i, cell_i in zip(*sphere_i):
@@ -987,11 +991,11 @@ def cli():
 
         rmol0_rotpos = rmols[0].selected_rotpos
         specialatoms = rmols[0].specialatoms
+        atomnotoindex = rmols[0].atomnotoindex
 
-        nnormal = len(rmol0_rotpos)
-        nspecial = len(rmols[0].averagegroups)
-        intra_moments = np.zeros(nnormal + nspecial)
-        inter_moments = np.zeros(nnormal + nspecial)
+        natoms = len(rmol0_rotpos)
+        intra_moments = np.zeros(natoms)
+        inter_moments = np.zeros(natoms)
         intra_moments_dict = defaultdict(list)
         inter_moments_dict = defaultdict(list)
 
@@ -1017,23 +1021,20 @@ def cli():
 # Account for intermolecular coupling within averaging groups
         for groupn, group in enumerate(rmols[0].averagegroups):
             D2 = D2_contribution(rmols[0].specialaveragetensors[groupn], B_axis)
-# 3 averaged dipolar couplings, added to both atoms of each pair
-            intra_moments[nnormal + groupn] += 6*D2
+            for atomi, atomj in getpairwise(group):
+                i = atomnotoindex[atomi]
+                j = atomnotoindex[atomj]
+                intra_moments[i] += D2
+                intra_moments[j] += D2
 
         labels = rmols[0].labels
-        speciallabels = rmols[0].speciallabels
 
         alllabels = []
-        for i in range(nnormal):
+        for i in range(natoms):
             lab = labels[rmol0_rotpos[i][0]]
             alllabels.append(lab)
             intra_moments_dict[lab].append(intra_moments[i])
             inter_moments_dict[lab].append(inter_moments[i])
-
-        for i, lab in enumerate(speciallabels):
-            alllabels.append(lab)
-            intra_moments_dict[lab].append(intra_moments[nnormal + i])
-            inter_moments_dict[lab].append(inter_moments[nnormal + i])
 
         print("Label\tIntra-drss/kHz\tInter-drss/kHz\tTotal drss/kHz")
 
@@ -1076,7 +1077,6 @@ def cli():
               "{:g} Å: {:.2f} kHz^2".format(R, mean_dSS_inter))
         print("Mean d_SS: {:.2f} kHz^2    Mean d_RSS {:.2f} kHz".format(mean_dSS_total, mean_dSS_total**0.5))
 
-        natoms = nnormal + 3 * nspecial
         total_dSS_intra += degfactor * natoms * mean_dSS_intra
         total_dSS_inter += degfactor * natoms * mean_dSS_inter
         total_natoms += degfactor * natoms
@@ -1090,6 +1090,8 @@ def cli():
     print("Second moment: {:.2f} (Intra: {:.2f}  Inter: {:.2f}) kHz^2".format(mean_dSS*M2scaling_factor,
                         mean_dSS_intra*M2scaling_factor, mean_dSS_inter*M2scaling_factor))
 
+    if autoaveragemethyl:
+        print("\nNote that --autoaveragemethyl introduces significant approximations.")
 
 if __name__ == "__main__":
     # call  the cli
