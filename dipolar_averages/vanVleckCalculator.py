@@ -727,13 +727,13 @@ class RotatingMolecule(object):
                 print("Axis checks passed")
 
 
-        def do_rotations(ps):
+        def do_rotations(ps, ignore_origin=False):
             rot_positions = []
             for p in ps:
                 all_rotations = [p]
                 # successively apply rotations to initial point
                 for rot_def in self.rotations:
-                    all_rotations = [self._expand_rotation(x, *rot_def)
+                    all_rotations = [self._expand_rotation(x, *rot_def, ignore_origin=ignore_origin)
                                      for x in all_rotations]
                     all_rotations = np.concatenate(all_rotations) # Some kind of flattening?
                 rot_positions.append(all_rotations)
@@ -756,19 +756,19 @@ class RotatingMolecule(object):
         self.specialaveragetensors = []
         self.alllabel = self.labels.tolist()
         for d, ivec in specialtensors:
-            rotvecs = do_rotations(ivec)
+            rotvecs = do_rotations([ivec], ignore_origin=True)[0]
             averageD = average_special_dipolar_tensor(d, rotvecs)
             self.specialaveragetensors.append(averageD)
 
 
     @staticmethod
-    def _expand_rotation(x, R, o, n):
+    def _expand_rotation(x0, R, o, n, ignore_origin=False):
         """ Internal function to generate set of positions corresponding
         to rotation about :math:`C_n`
 
         Parameters
         ----------
-        x : 3-vector
+        x0 : 3-vector
             Starting position (Cartesian axes)
         R : 3 x 3 array
             Rotation matrix
@@ -776,18 +776,26 @@ class RotatingMolecule(object):
             Origin (point on rotation axis)
         n : integer
             `n` of :math:`C_n`, where `n` is guaranteed to be >1
+        ignore_origin: boolean
+            Ignore rotation origin i.e. rotate internuclear vector (default False)
 
         Returns
         -------
         array of 3-vectors:
             Set of `n` positions
         """
-        all_rotations = [x]
+        all_rotations = [x0]
         for _ in range(1, n):
             x = all_rotations[-1]
-            x = (R @ (x-o)) + o
+            if ignore_origin:
+                x = R @ x
+            else:
+                x = (R @ (x-o)) + o
             all_rotations.append(x)
-        return np.array(all_rotations)
+        try:
+            return np.array(all_rotations)
+        except ValueError:
+            raise ValueError("_expand_rotations failed. Input was not a vector of positions?")
 
 
 def cli():
