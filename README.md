@@ -117,6 +117,10 @@ will output
 
 In other words, the structure contains four molecules of diamantane in the unit cell, one unique molecule. 54 molecules are within 15 Å of the reference molecule. The following table gives the intramolecular and intermolecular contributions to the root-sum-square dipolar coupling at the 4 crystallographically distinct H sites. The final lines give the mean sum-square and root-sum-square couplings, followed by the corresponding second moments (proportional to the mean sum-square-coupling).
 
+## Experimental
+
+The **Experimental** directory contains Python scripts to aid quantifying second moments from experimental data. See this directory for more information.
+
 ## Test script
 
 **test/AverageUnitTest.py** is a test script to validate the key result that the averaging of motionally averaged dipolar tensors can be carried out analytically.
