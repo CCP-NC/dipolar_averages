@@ -119,7 +119,7 @@ In other words, the structure contains four molecules of diamantane in the unit 
 
 ## Experimental
 
-The **Experimental** directory contains Python scripts to aid quantifying second moments from experimental data. See this directory for more information.
+The **Experimental** directory contains Python scripts to aid quantifying second moments from experimental data. See this directory for more information. Note that this directory can be downloaded independently of the rest of the repository. The scripts and examples it contains are _not_ installed by the package installation script.
 
 ## Test script
 
